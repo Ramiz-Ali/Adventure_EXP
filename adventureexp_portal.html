@@ -76,6 +76,10 @@ body.auth-mode .topbar{display:none !important}
 
 /* Confirm modal */
 .confirm-icon{width:56px;height:56px;border-radius:50%;background:var(--re-lt);color:var(--re);display:flex;align-items:center;justify-content:center;font-size:26px;margin:0 auto 14px}
+.confirm-icon.success{background:#E5F5EC;color:#2A9D6E}
+.confirm-icon.info{background:#E5F2F8;color:#2A94BC}
+.confirm-icon.warning{background:#FFF3E0;color:#D4831A}
+.confirm-icon.error{background:#FBE9E7;color:#C62828}
 .u-av{width:34px;height:34px;border-radius:50%;background:var(--or);display:flex;align-items:center;justify-content:center;font-size:12px;font-family:"Nunito",sans-serif;font-weight:900;color:#fff;flex-shrink:0;overflow:hidden}
 .u-av img{width:100%;height:100%;object-fit:cover}
 .u-av-btn{cursor:pointer;transition:transform .12s, box-shadow .12s}
@@ -171,12 +175,19 @@ body.auth-mode .topbar{display:none !important}
 
 /* PHOTO GRID */
 
+.photo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
 .photo-slot{aspect-ratio:4/3;border-radius:10px;border:2px dashed var(--brd2);display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden;position:relative;cursor:pointer;transition:all .15s;background:var(--bg)}
 .photo-slot:hover{border-color:var(--or);background:var(--kh-lt)}
-.photo-slot img{width:100%;height:100%;object-fit:cover;border-radius:9px;position:absolute;inset:0}
+.photo-slot img{width:100%;height:100%;object-fit:cover;border-radius:9px;position:absolute;inset:0;z-index:0}
 .photo-slot-lbl{font-size:10px;font-weight:700;color:var(--mu);text-align:center;padding:6px;display:flex;flex-direction:column;align-items:center;gap:3px;position:relative;z-index:1}
 .photo-slot-lbl span{font-size:20px}
-.photo-inp{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.photo-inp{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;z-index:2}
+.photo-slot.logo{aspect-ratio:1;width:140px;flex:0 0 140px}
+.photo-slot .photo-remove{position:absolute;top:4px;right:4px;z-index:3;background:rgba(0,0,0,.55);color:#fff;border:none;border-radius:50%;width:22px;height:22px;font-size:14px;line-height:1;cursor:pointer;display:none}
+.photo-slot:hover .photo-remove{display:block}
+.avatar-loading{position:absolute;inset:0;background:rgba(255,255,255,.7);display:flex;align-items:center;justify-content:center;z-index:4}
+.avatar-loading:after{content:"";width:24px;height:24px;border:3px solid var(--or);border-top-color:transparent;border-radius:50%;animation:sp 0.8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
 
 /* CPI */
 .cpih{display:inline-flex;flex-direction:column;align-items:center;background:var(--kh-lt);border:1px solid var(--kh);border-radius:9px;padding:4px 10px;min-width:50px}
@@ -405,6 +416,7 @@ var CATL=["Timing","Finances","Role","Lifestyle","Flexibility"];
 var CATC=["#2A94BC","#2A9D6E","#87D3ED","#EA5A4F","#C0E2EE"];
 
 var role="student", studentView="dashboard", empView="listings", adminView="overview";
+var adminEmpFormId=null, adminJobFormMode=false, adminJobFormId=null, adminShowHidden=false;
 var detailJobId=null;
 var filterSeason=new Set(), filterMonth=new Set(), filterRegion=new Set(), filterActivity=new Set();
 var filterCPI="", filterNow=false, searchQ="";
@@ -430,7 +442,36 @@ function S(id){
   return {name:"Participant",firstName:"",lastName:"",location:"",age:18,industries:[],seasons:[],destinations:[],profileScore:0,visibility:false,notes:"",pathway:"",favorites:new Set(),pd:{startDate:"",endDate:"",minDuration:"",flex:"",license:"",passport:"",car:"",roles:[],avoidText:"",priority:"",envs:[],housingPref:"",recImportance:"",hobbies:[],finGoal:"",savings:"",income:"",altOpen:"",mindset:"",extraNotes:"",successMeaning:""}};
 }function MA(jid){return myApp(jid);}
 function bdg(t,c){return '<span class="bdg '+c+'">'+t+'</span>';}
+// Renders the employer logo. If logoUrl is set, returns an <img>; otherwise the
+// 🏢 emoji fallback. Keeps every row renderer (rAdmEmp, rEmpList, rJobDetail…)
+// from having to know about the URL vs emoji split.
+function empLogo(e){
+  if(!e) return '&#127970;';
+  if(e.logoUrl) return '<img src="'+e.logoUrl+'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:8px;display:block">';
+  return e.logo || '&#127970;';
+}
 function cpiC(v){return v>=9?"#2A9D6E":v>=7?"#2A94BC":"#EA5A4F";}
+// Participant-facing CPI badge. Per spec, participants must NEVER see the
+// raw CPI number — only the tier emoji + label (🔵 ≥10, 🟢 8–9.9, 🟡 6–7.9,
+// 🔴 <6). Returns empty string when the job has no pay rate (badge would
+// be meaningless — the formula floors at 1).
+function cpiBadge(j){
+  if(!j || j.pay_rate===0 || j.pay==='' || j.pay==null) {
+    // pay_rate may not be on the FE object; rely on j.pay (formatted string).
+    // Falsy / dash means no pay set — skip badge.
+    if(!j || !j.pay) return '';
+  }
+  var c = j.cpi || 0;
+  var emoji = c>=10?'&#128998;':c>=8?'&#128994;':c>=6?'&#128993;':'&#128992;';
+  var label = c>=10?'High Cost-Positive'
+            : c>=8 ?'Moderate Cost-Positive'
+            : c>=6 ?'Experience-Focused'
+            :       'Lifestyle-First';
+  return '<div class="cpih" title="'+label+'" style="flex-direction:row;gap:6px;padding:6px 10px">'+
+    '<span style="font-size:14px">'+emoji+'</span>'+
+    '<span class="cpil" style="font-size:9px;line-height:1.1;text-align:left">'+label+'</span>'+
+  '</div>';
+}
 function mColor(s){return s>=75?"#2A9D6E":s>=55?"#2A94BC":"#EA5A4F";}
 function mLabel(s){return s>=75?"Strong match":s>=55?"Good match":s>=35?"Partial match":"Low match";}
 function approveStudentById(id){var s=S(id);if(s)s.approved=true;var u=users.find(function(u){return u.id===id;});if(u)u.approved=true;render();}
@@ -447,40 +488,39 @@ document.addEventListener('click',function(e){
     var a=t.dataset.action, id=t.dataset.id||null, id2=t.dataset.id2||null, val=t.dataset.val;
     if(a==='nav'){studentView=val;detailJobId=null;render();}
     else if(a==='empnav'){empView=val;render();}
-    else if(a==='adminnav'){adminView=val;render();}
+    else if(a==='adminnav'){adminView=val;if(val!=='settings')window._adminNotifSettings=null;render();}
     else if(a==='detail'){detailJobId=id;render();}
     else if(a==='back'||a==='detailback'){detailJobId=null;render();}
     else if(a==='fav'){toggleFav(id);e.stopPropagation();}
-    else if(a==='apply'){reqInterview(id);}
+    else if(a==='apply'){withButtonLoading(t,function(){return reqInterview(id);});}
     else if(a==='thread'){openThread(id);}
     else if(a==='athread'){openThreadAll(id);}
-    else if(a==='accept'){acceptOffer(id);}
-    else if(a==='decline'){declineOffer(id);}
+    else if(a==='accept'){withButtonLoading(t,function(){return acceptOffer(id);});}
+    else if(a==='decline'){withButtonLoading(t,function(){return declineOffer(id);});}
     else if(a==='closemod'){
       // Only close when the user actually clicks the dark overlay (.mow),
       // NOT when they click whitespace inside .mod (which would bubble up).
       if (t.classList.contains('mow') && e.target.closest('.mod')) return;
       closeModal();
     }
-    else if(a==='sendmsg'){sendMsg(id);}
+    else if(a==='sendmsg'){withButtonLoading(t,function(){return sendMsg(id);});}
     else if(a==='ptab'){window._pTab=val;render();}
-    else if(a==='empaccept'){updateAppAll(id,'interviewing');render();}
-    else if(a==='empdecline'){updateAppAll(id,'withdrawn');render();}
-    else if(a==='empoffer'){updateAppAll(id,'offered');render();}
-    else if(a==='setstatus'){updateAppAll(id,val);render();}
-    else if(a==='vis'){toggleVis(id);}
-    else if(a==='verify'){verifyEmp(id);render();}
+    else if(a==='empaccept'){withButtonLoading(t,function(){return updateAppAll(id,'interviewing');});}
+    else if(a==='empdecline'){withButtonLoading(t,function(){return updateAppAll(id,'withdrawn');});}
+    else if(a==='empoffer'){withButtonLoading(t,function(){return updateAppAll(id,'offered');});}
+    else if(a==='setstatus'){withButtonLoading(t,function(){return updateAppAll(id,val);});}
+    else if(a==='vis'){withButtonLoading(t,function(){return toggleVis(id);});}
+    else if(a==='verify'){withButtonLoading(t,function(){return verifyEmp(id);});}
     else if(a==='matchjobs'){openMatchModal(id);}
-    else if(a==='adminplace'){adminPlace(id,id2);}
+    else if(a==='adminplace'){withButtonLoading(t,function(){return adminPlace(id,id2);});}
     else if(a==='editprofile'){openEditProfile();}
-    else if(a==='saveprofile'){saveProfile();}
+    else if(a==='saveprofile'){withButtonLoading(t,function(){return saveProfile();});}
     else if(a==='addemp'){adminEmpFormId=0;adminView='empform';render();}
     else if(a==='editemp'){adminEmpFormId=id;adminView='empform';render();}
-    else if(a==='saveemp'){saveEmpFull(id);}
-    else if(a==='addjob'){adminJobFormMode=true;adminView='jobform';window._jobEmpId=id||0;render();}
-    else if(a==='editjob'){openEditJobModal(id);}
-    else if(a==='savejob'){saveJobFull(id,id2);}
-    else if(a==='addstudent'){openAddStudentModal();}
+    else if(a==='saveemp'){withButtonLoading(t,function(){return saveEmpFull(id);});}
+    else if(a==='addjob'){adminJobFormMode=true;adminJobFormId=0;adminView='jobform';window._jobEmpId=id||0;window._jobFormData=null;render();}
+    else if(a==='editjob'){adminJobFormMode=true;adminJobFormId=id;adminView='jobform';var _ej=J(id);window._jobEmpId=_ej?_ej.empId:0;window._jobFormData=null;render();}
+    else if(a==='savejob'){withButtonLoading(t,function(){return saveJobFull(id,id2);});}
     else if(a==='editstudent'){openAdminStudentEdit(id);}
     else if(a==='savestudent'){saveAdminStudent(id);}
     else if(a==='chip'){toggleChip(t);}
@@ -498,16 +538,19 @@ document.addEventListener('click',function(e){
     else if(a==='docreateparticipant'){doCreateParticipant();}
     else if(a==='doforgot'){doForgot();}
     else if(a==='dosetpw'){doSetPassword();}
-    else if(a==='submitrev'){submitReview(id);}
+    else if(a==='submitrev'){withButtonLoading(t,function(){return submitReview(id);});}
     else if(a==='openrev'){openReviewModal(id);}
     else if(a==='adminphotos'){openAdminPhotoModal(id);}
-    else if(a==='deleterev'){deleteReview(id);render();}
+    else if(a==='deleterev'){deleteReview(id);}
     else if(a==='togglenow'){filterNow=!filterNow;render();}
-    else if(a==='doaddstudent'){addStudent();}
-    else if(a==='submitadminrev'){submitAdminReview();}
+    else if(a==='submitadminrev'){withButtonLoading(t,function(){return submitAdminReview();});}
     else if(a==='setstar'){setStarRating(parseInt(val));}
     else if(a==='adminstar'){setAdminStar(parseInt(val));}
     else if(a==='openaddreview'){adminView='reviews';render();}
+    else if(a==='flagincomplete'){withButtonLoading(t,function(){return flagIncompleteProfile(id);});}
+    else if(a==='savenotifsettings'){withButtonLoading(t,function(){return saveNotifSettings();});}
+    else if(a==='togglehidden'){adminShowHidden=!adminShowHidden;render();}
+    else if(a==='rmphoto'){e.stopPropagation();e.preventDefault();withButtonLoading(t,function(){return removeEmpPhoto(id);});}
     else if(a==='approvestudent'){approveStudentById(id);}
     else if(a==='togglebell'){toggleBell();}
     else if(a==='opennotif'){openNotification(id);}
@@ -521,7 +564,7 @@ document.addEventListener('click',function(e){
     }
   }
   var am=e.target.closest('[data-authmode]');
-  if(am){authMode=am.dataset.authmode;render();return;}
+  if(am){if(authMode==='signup'&&am.dataset.authmode!=='signup'){window._signupForm=null;signupPhoto=null;}authMode=am.dataset.authmode;render();return;}
   var shpw=e.target.closest('[data-showpw]');
   if(shpw){var si=document.getElementById(shpw.dataset.showpw);if(si){si.type=si.type==='password'?'text':'password';shpw.textContent=si.type==='password'?'Show':'Hide';}return;}
 });
@@ -536,7 +579,7 @@ document.addEventListener('input',function(e){
   var ph=e.target.closest('[data-photo]');
   if(ph&&ph.files&&ph.files[0]){handlePhotoUpload(ph);return;}
   var spu=e.target.closest('[data-suphotoinp]');
-  if(spu&&spu.files&&spu.files[0]){var r=new FileReader();r.onload=function(ev){signupPhoto=ev.target.result;render();};r.readAsDataURL(spu.files[0]);return;}
+  if(spu&&spu.files&&spu.files[0]){var r=new FileReader();r.onload=function(ev){signupPhoto=ev.target.result;snapshotSignupForm();render();};r.readAsDataURL(spu.files[0]);return;}
 });
 document.addEventListener('change',function(e){
   var u=e.target.closest('[data-upd]');
@@ -544,8 +587,23 @@ document.addEventListener('change',function(e){
   var ph=e.target.closest('[data-photo]');
   if(ph&&ph.files&&ph.files[0]){handlePhotoUpload(ph);return;}
   var spu=e.target.closest('[data-suphotoinp]');
-  if(spu&&spu.files&&spu.files[0]){var r2=new FileReader();r2.onload=function(ev){signupPhoto=ev.target.result;render();};r2.readAsDataURL(spu.files[0]);return;}
+  if(spu&&spu.files&&spu.files[0]){var r2=new FileReader();r2.onload=function(ev){signupPhoto=ev.target.result;snapshotSignupForm();render();};r2.readAsDataURL(spu.files[0]);return;}
 });
+
+// Capture whatever the user has already typed into the signup form so a
+// re-render (triggered by photo upload, or anything else) can re-inject the
+// values instead of blowing them away.
+function snapshotSignupForm(){
+  function val(id){var el=document.getElementById(id);return el?el.value:undefined;}
+  window._signupForm = {
+    firstName: val('su-fn'),
+    lastName: val('su-ln'),
+    email: val('su-em'),
+    timezone: val('su-tz'),
+    password: val('su-pw'),
+    password2: val('su-pw2'),
+  };
+}
 document.addEventListener('keydown',function(e){
   if(e.key==='Enter'){
     var li=document.getElementById('li-email');
@@ -574,6 +632,7 @@ async function handlePhotoUpload(inp) {
   // Disable any Save / Change-photo button until upload completes.
   document.querySelectorAll('.mod button').forEach(function(b){ b.setAttribute('disabled', 'true'); });
 
+  var photoEmpId = null; // set if this upload touched the admin photo modal
   try {
     if (key === 'profile' || key === 'avatar') {
       // Participant / admin avatar.
@@ -582,44 +641,74 @@ async function handlePhotoUpload(inp) {
       await window.sb.from('profiles').update({ photo_url: url }).eq('id', currentUser.id);
       currentUser.photo_url = url;
       photoStore['profile'] = url; // refresh the cached preview to the final URL
+    } else if (key.indexOf('emp-logo-') === 0) {
+      // Employer logo: key shape "emp-logo-<employerId>".
+      photoEmpId = key.substring('emp-logo-'.length);
+      var logoUrl = await window.Upload.uploadEmployerPhoto(file, photoEmpId);
+      await window.sb.from('employers').update({ logo_url: logoUrl }).eq('id', photoEmpId);
+      photoStore[key] = logoUrl;
     } else if (key.indexOf('emp-') === 0) {
-      // Employer photo slot: key shape "emp-<employerId>-<slotIndex>".
+      // Employer gallery slot: key shape "emp-<employerId>-<slotIndex>".
       var parts = key.split('-');
       // Reconstruct UUID (it contains dashes itself).
       var slotIdx = parseInt(parts[parts.length - 1], 10);
-      var empId = parts.slice(1, parts.length - 1).join('-');
-      var empUrl = await window.Upload.uploadEmployerPhoto(file, empId);
-      var emp = E(empId);
-      var photos = (emp && emp.photos) ? emp.photos.slice() : [];
-      photos[slotIdx] = empUrl;
-      await window.sb.from('employers').update({ photos: photos.filter(Boolean) }).eq('id', empId);
-    } else if (key.indexOf('housing-') === 0) {
-      // Housing photo slot: key shape "housing-<jobId>-<slotIndex>".
-      var hParts = key.split('-');
-      var hIdx = parseInt(hParts[hParts.length - 1], 10);
-      var jobId = hParts.slice(1, hParts.length - 1).join('-');
-      var housingUrl = await window.Upload.uploadHousingPhoto(file, jobId);
-      // Stash the URL under the photoStore key so the UI shows it; persisting
-      // to a jobs.photos column would need a schema column we haven't added.
-      photoStore[key] = housingUrl;
+      photoEmpId = parts.slice(1, parts.length - 1).join('-');
+      var empUrl = await window.Upload.uploadEmployerPhoto(file, photoEmpId);
+      var emp = E(photoEmpId);
+      var rawPhotos = (emp && emp.raw && Array.isArray(emp.raw.photos)) ? emp.raw.photos.slice() : [];
+      rawPhotos[slotIdx] = empUrl;
+      // Pad to keep slot indices stable — empty strings are fine in text[].
+      while (rawPhotos.length <= slotIdx) rawPhotos.push('');
+      await window.sb.from('employers').update({ photos: rawPhotos }).eq('id', photoEmpId);
+      photoStore[key] = empUrl;
     } else {
       // Unknown key — just keep the local preview.
       return;
     }
   } catch (e) {
     console.error('photo upload failed', key, e);
-    alert('Upload failed: ' + (e.message || 'unknown error'));
+    showAlert({type:'error',title:'Upload failed',body:e.message||'unknown error'});
     delete photoStore[key];
   }
   await hydrateAndRender();
-  // Re-open the profile modal if it was open, so the avatar swaps to the
-  // final hosted URL and the Save button re-enables.
+  // Re-open the participant profile modal if it was open.
   if (key === 'profile' || key === 'avatar') {
     var stillOpen = document.querySelector('.mod h3');
     if (stillOpen && stillOpen.textContent.indexOf('Edit profile') >= 0) {
       openEditProfile();
     }
   }
+  // Re-open the admin photo modal if it was the one we touched — without this
+  // the new image only shows after the user closes and re-opens the modal.
+  if (photoEmpId && window._adminPhotoEmpId === photoEmpId) {
+    openAdminPhotoModal(photoEmpId);
+  }
+}
+
+// Remove a photo from an employer (logo or gallery slot).
+async function removeEmpPhoto(rid){
+  if(!rid) return;
+  try {
+    if (rid.indexOf('logo-') === 0) {
+      var empId = rid.substring('logo-'.length);
+      await window.sb.from('employers').update({ logo_url: null }).eq('id', empId);
+      delete photoStore['emp-logo-'+empId];
+      await hydrateAndRender();
+      if (window._adminPhotoEmpId === empId) openAdminPhotoModal(empId);
+    } else if (rid.indexOf('gallery-') === 0) {
+      var rest = rid.substring('gallery-'.length);
+      var lastDash = rest.lastIndexOf('-');
+      var empId2 = rest.substring(0, lastDash);
+      var idx = parseInt(rest.substring(lastDash+1), 10);
+      var emp = E(empId2);
+      var rawPhotos2 = (emp && emp.raw && Array.isArray(emp.raw.photos)) ? emp.raw.photos.slice() : [];
+      rawPhotos2[idx] = '';
+      await window.sb.from('employers').update({ photos: rawPhotos2 }).eq('id', empId2);
+      delete photoStore['emp-'+empId2+'-'+idx];
+      await hydrateAndRender();
+      if (window._adminPhotoEmpId === empId2) openAdminPhotoModal(empId2);
+    }
+  } catch(e) { console.error('remove photo failed', e); showAlert({type:'error',title:'Remove failed',body:e.message||String(e)}); }
 }
 function getPhoto(key) { return photoStore[key] || null; }
 function isLoggedIn() { return currentUser !== null; }
@@ -892,6 +981,18 @@ function renderSignupForm() {
     ? '<div class="photo-zone has-img" style="margin-bottom:10px"><img class="photo-prev" src="'+signupPhoto+'" alt="Your photo" style="width:56px;height:56px;border-radius:50%;object-fit:cover;border:2px solid var(--op);margin:0 auto 6px;display:block"><div style="font-size:11px;color:var(--op);font-weight:700">Photo added &#10003;</div><input type="file" accept="image/*" data-suphotoinp="1"></div>'
     : '<div class="photo-zone" style="margin-bottom:10px"><div style="font-size:24px;margin-bottom:4px">&#128247;</div><div style="font-size:12px;font-weight:700;color:var(--mu)">Upload a profile photo</div><div style="font-size:10px;color:var(--mu);margin-top:2px">Optional</div><input type="file" accept="image/*" data-suphotoinp="1"></div>';
 
+  // Restore values typed before the last re-render (e.g. a photo upload
+  // mid-form). snapshotSignupForm() captures these on every re-render trigger.
+  var sf = window._signupForm || {};
+  function esc(v){return (v==null?'':String(v)).replace(/"/g,'&quot;');}
+  var tzSelOpts = tzOptions;
+  if (sf.timezone) {
+    tzSelOpts = tzOptions.replace(
+      new RegExp('(<option value="'+sf.timezone.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&')+'")'),
+      '$1 selected'
+    );
+  }
+
   return '<div class="auth-logo-row">' +
       '<div><div style="font-family:Nunito,sans-serif;font-size:20px;font-weight:900;color:var(--tx)">Adventure<span style="color:var(--or-dk)">EXP</span></div></div>' +
     '</div>' +
@@ -899,18 +1000,18 @@ function renderSignupForm() {
     '<div class="auth-sub2">Join AdventureEXP and find your next adventure</div>' +
     photoHtml +
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
-      '<div><label class="albl" style="display:block;margin-bottom:4px">First name</label><input class="ainp" type="text" id="su-fn" placeholder="First" autocomplete="given-name"></div>' +
-      '<div><label class="albl" style="display:block;margin-bottom:4px">Last name</label><input class="ainp" type="text" id="su-ln" placeholder="Last" autocomplete="family-name"></div>' +
+      '<div><label class="albl" style="display:block;margin-bottom:4px">First name</label><input class="ainp" type="text" id="su-fn" placeholder="First" autocomplete="given-name" value="'+esc(sf.firstName)+'"></div>' +
+      '<div><label class="albl" style="display:block;margin-bottom:4px">Last name</label><input class="ainp" type="text" id="su-ln" placeholder="Last" autocomplete="family-name" value="'+esc(sf.lastName)+'"></div>' +
     '</div>' +
     '<label class="albl" style="display:block;margin-top:10px;margin-bottom:4px">Email address</label>' +
-    '<input class="ainp" type="email" id="su-em" placeholder="you@example.com" autocomplete="email">' +
+    '<input class="ainp" type="email" id="su-em" placeholder="you@example.com" autocomplete="email" value="'+esc(sf.email)+'">' +
     '<label class="albl" style="display:block;margin-top:10px;margin-bottom:4px">Time zone</label>' +
-    '<select class="ainp" id="su-tz" style="cursor:pointer">'+tzOptions+'</select>' +
+    '<select class="ainp" id="su-tz" style="cursor:pointer">'+tzSelOpts+'</select>' +
     '<label class="albl" style="display:block;margin-top:10px;margin-bottom:4px">Password</label>' +
-    '<div class="apw"><input class="ainp" type="password" id="su-pw" placeholder="At least 8 characters" data-strength="1"><button class="ashowhide" data-showpw="su-pw">Show</button></div>' +
+    '<div class="apw"><input class="ainp" type="password" id="su-pw" placeholder="At least 8 characters" data-strength="1" value="'+esc(sf.password)+'"><button class="ashowhide" data-showpw="su-pw">Show</button></div>' +
     '<div class="str-bar" style="margin-top:4px"><div class="str-fill" id="str-fill"></div></div>' +
     '<label class="albl" style="display:block;margin-top:10px;margin-bottom:4px">Confirm password</label>' +
-    '<div class="apw"><input class="ainp" type="password" id="su-pw2" placeholder="Repeat password"><button class="ashowhide" data-showpw="su-pw2">Show</button></div>' +
+    '<div class="apw"><input class="ainp" type="password" id="su-pw2" placeholder="Repeat password" value="'+esc(sf.password2)+'"><button class="ashowhide" data-showpw="su-pw2">Show</button></div>' +
     '<div class="aerr" id="su-err"></div>' +
     '<button class="asubmit" data-action="docreateparticipant">Create my account &#8594;</button>' +
     '<div class="asmall" style="margin-top:12px">Already have an account? <a data-authmode="login">Sign in</a></div>';
@@ -937,6 +1038,36 @@ async function withSubmitLoading(actionName, fn) {
     if (btn && original !== null) {
       btn.disabled = false;
       btn.innerHTML = original;
+    }
+  }
+}
+
+// Per-element version of withSubmitLoading — needed when multiple buttons share
+// the same data-action (Place rows, status buttons, Hide/Show on each
+// participant, etc.) so we can spin the actual clicked element.
+async function withButtonLoading(btn, fn) {
+  if (!btn) return fn();
+  var original = btn.innerHTML;
+  var wasDisabled = btn.disabled;
+  var origMinWidth = btn.style.minWidth;
+  // Pin the button's current width so the spinner doesn't make it shrink.
+  var w = btn.offsetWidth;
+  // Choose the spinner color based on the button's background — primary
+  // buttons (orange / blue / accent) use the white spinner, others the orange.
+  var cls = /btn-p|btn-a|btn-b|asubmit|rb/.test(btn.className) ? 'spinner spinner-white' : 'spinner';
+  if (w > 0) btn.style.minWidth = w + 'px';
+  btn.disabled = true;
+  btn.innerHTML = '<span class="'+cls+'"></span>';
+  try {
+    await fn();
+  } finally {
+    // The DOM may have been swapped out by a render() call inside fn — if the
+    // original button no longer exists, the next render already drew a fresh
+    // one and there's nothing to restore.
+    if (document.contains(btn)) {
+      btn.disabled = wasDisabled;
+      btn.innerHTML = original;
+      btn.style.minWidth = origMinWidth;
     }
   }
 }
@@ -1099,6 +1230,7 @@ async function doCreateParticipant() {
         } catch (e) { console.error('signup photo upload failed', e); }
       }
       signupPhoto = null;
+      window._signupForm = null;
       currentUser = legacyUser(profile);
       role = "student";
       await hydrateAndRender();
@@ -1193,6 +1325,7 @@ function showModal(h){document.getElementById("modal-root").innerHTML='<div clas
 function closeModal(){
   document.getElementById("modal-root").innerHTML="";
   _openThreadAppId = null;
+  window._adminPhotoEmpId = null;
 }
 function render(){
   if (!isLoggedIn()) {
@@ -1266,7 +1399,22 @@ function notificationLabel(n) {
   }
 }
 
+// Has the current user toggled in-system notifications off? Reads the embedded
+// notification_settings row that fetchProfile attaches to currentUser.raw.
+// PostgREST returns 1:1 embeds as either an object or a one-element array, so
+// handle both shapes.
+function bellEnabled() {
+  if (!currentUser || !currentUser.raw) return true;
+  var ns = currentUser.raw.notification_settings;
+  if (!ns) return true;
+  var row = Array.isArray(ns) ? ns[0] : ns;
+  return row ? row.in_system_enabled !== false : true;
+}
+
 function renderBellDropdown() {
+  if (!bellEnabled()) {
+    return '<div class="bell-empty">In-system notifications are muted. Re-enable in Admin → Settings.</div>';
+  }
   if (!notifications.length) {
     return '<div class="bell-empty">No notifications yet</div>';
   }
@@ -1283,7 +1431,10 @@ function renderBellDropdown() {
 }
 
 function renderBell() {
-  var unread = notifications.filter(function(n){return !n.read_at;}).length;
+  // When in-system notifications are muted, show the bell with no badge and
+  // no count — the dropdown still opens so the user knows where to re-enable.
+  var muted = !bellEnabled();
+  var unread = muted ? 0 : notifications.filter(function(n){return !n.read_at;}).length;
   // Inline SVG bell — sharp, scales with currentColor, no emoji font fallback.
   var bellSvg =
     '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" ' +
@@ -1442,7 +1593,7 @@ function rDashboard(){
     html+='<div class="shd">Recent applications</div>';
     html+=ma.slice(0,3).map(function(a){
       var j=J(a.jobId);var e=E(j&&j.empId);
-      return '<div class="lr" style="cursor:default"><div class="el">'+(e&&e.logo||'&#127970;')+'</div>'+
+      return '<div class="lr" style="cursor:default"><div class="el">'+empLogo(e)+'</div>'+
         '<div class="lb2"><div class="lt">'+(j&&j.title||'')+'</div><div class="le">'+(e&&e.name||'')+'</div></div>'+
         bdg(a.status,STC[a.status])+'</div>';
     }).join('');
@@ -1464,7 +1615,7 @@ function rDiscover(){
     var e=E(j.empId);var sc=j.score.overall;var c=mColor(sc);
     var ap=MA(j.id);var av=p.avoidText&&j.jobRoles.some(function(r){return p.avoidText.toLowerCase().includes(r.replace(/-/g," "));});
     html+='<div class="lr'+(av?" opacity:.4":"")+'" data-action="detail" data-id="'+j.id+'" style="'+(av?"opacity:.45":"")+'">'+
-      '<div class="el">'+(e&&e.logo||"🏢")+'</div>'+
+      '<div class="el">'+empLogo(e)+'</div>'+
       '<div class="lb2">'+
         '<div class="lt">'+j.title+'</div>'+
         '<div class="le">@ '+(e&&e.name||"")+' · '+(e&&e.region||"")+'</div>'+
@@ -1499,10 +1650,11 @@ function rListings(){
     '<div class="sbs"><div class="sbt">Activity<button class="clr" data-action="clractivity">clear</button></div>'+
     aA.map(function(a){return '<div class="fo'+(filterActivity.has(a)?' on':'')+' data-action="filter" data-val="'+a+'" data-set="activity"><span>'+a+'</span><span class="fc">'+(aCt[a]||0)+'</span></div>';}).join('')+
     '</div>'+
-    '<div class="sbs"><div class="sbt">Min CPI<button class="clr" data-action="clrcpi">clear</button></div>'+
+    '<div class="sbs"><div class="sbt">Earnings tier<button class="clr" data-action="clrcpi">clear</button></div>'+
     '<select style="font-size:11px;margin-top:3px;width:100%" data-upd="filterCPI">'+
-    '<option value="">Any CPI</option>'+
-    ['7','8','9','10'].map(function(v){return '<option value="'+v+'"'+(filterCPI===v?' selected':'')+'>'+v+'+ ('+['Good','Great','Excellent','Top'][parseInt(v)-7]+')</option>';}).join('')+
+    '<option value="">Any tier</option>'+
+    [['6','&#128993; Experience-Focused or better'],['8','&#128994; Moderate Cost-Positive or better'],['10','&#128998; High Cost-Positive only']]
+      .map(function(o){return '<option value="'+o[0]+'"'+(filterCPI===o[0]?' selected':'')+'>'+o[1]+'</option>';}).join('')+
     '</select></div>'+
     '<div class="sbs"><div class="sbt">Hiring</div>'+
     '<div class="fo'+(filterNow?' on':'')+' data-action="togglenow"><span>Interviewing now</span><span class="fc">'+jobs.filter(function(j){return j.status==='open';}).length+'</span></div>'+
@@ -1514,7 +1666,7 @@ function rListings(){
       var e=E(j.empId);var ap=MA(j.id);
       var backNav='<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">'+'<button class="bkb" data-action="nav" data-val="dashboard">&#8592; Dashboard</button>'+'<span style="font-size:13px;font-weight:700;font-family:Nunito,sans-serif;color:var(--tx)">&#128196; Job Listings</span>'+'</div>';
   return backNav + '<div class="lr" data-action="detail" data-id="'+j.id+'">'+
-        '<div class="el">'+(e&&e.logo||"🏢")+'</div>'+
+        '<div class="el">'+empLogo(e)+'</div>'+
         '<div class="lb2">'+
           '<div class="lt">'+j.title+'</div>'+
           '<div class="le">@ '+(e&&e.name||"")+' · '+(e&&e.region||"")+'</div>'+
@@ -1565,7 +1717,7 @@ function rJobDetail(jid){
   var main=
     '<div class="card">'+
     '<div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:12px">'+
-      '<div class="dl">'+(e&&e.logo||"🏢")+'</div>'+
+      '<div class="dl">'+empLogo(e)+'</div>'+
       '<div style="flex:1">'+
         '<div style="font-size:19px;font-family:Nunito,sans-serif;font-weight:800;margin-bottom:3px">'+j.title+'</div>'+
         '<div style="color:var(--bl-dk);font-size:12px;font-weight:700;margin-bottom:2px">@ '+(e&&e.name||"")+'</div>'+
@@ -1575,7 +1727,7 @@ function rJobDetail(jid){
           '<span style="font-size:11px;color:var(--mu)">'+j.filled+' applications · '+(j.slots-j.filled)+' spots remaining</span>'+
         '</div>'+
       '</div>'+
-      '<div class="cpih"><span class="cpin" style="color:'+cpiC(j.cpi)+'">'+j.cpi.toFixed(1)+'</span><span class="cpil">CPI</span></div>'+
+      cpiBadge(j)+
     '</div>'+
     '<div style="display:flex;gap:7px;margin-bottom:12px">'+
       '<button class="btn btn-xs'+(s.favorites.has(j.id)?" btn-p":"")+'" data-action="fav" data-id="'+j.id+'">'+(s.favorites.has(j.id)?"★ Saved":"☆ Save")+'</button>'+
@@ -1597,6 +1749,21 @@ function rJobDetail(jid){
     '<div class="shd">Housing & benefits</div>'+
     '<div class="hb"><strong>Accommodation</strong>'+j.housing.type+' · '+j.housing.cost+' · '+j.housing.meals+'</div>'+
     '<div class="tr">'+(j.perks||[]).map(function(p){return bdg(p,"bt");}).join("")+'</div>'+
+    (function(){
+      // Gallery photos uploaded via the admin "Manage photos" modal. Falls
+      // back silently if the employer hasn't added any.
+      var photoLabels=["Location","Housing","Team","Workplace","Activities","Other"];
+      var raw=(e&&e.raw&&Array.isArray(e.raw.photos))?e.raw.photos:[];
+      var slots=raw.map(function(u,i){return u?{url:u,label:photoLabels[i]||""}:null;}).filter(Boolean);
+      if(!slots.length) return '';
+      return '<div class="dv"></div><div class="shd">Photos</div>'+
+        '<div class="photo-grid">'+slots.map(function(s){
+          return '<div class="photo-slot" style="cursor:default;border-style:solid;border-color:var(--brd)">'+
+            '<img src="'+s.url+'" alt="'+s.label+'">'+
+            (s.label?'<div class="photo-slot-lbl" style="position:absolute;left:6px;bottom:6px;top:auto;background:rgba(0,0,0,.55);color:#fff;padding:3px 7px;border-radius:5px;font-size:9px">'+s.label+'</div>':'')+
+          '</div>';
+        }).join('')+'</div>';
+    })()+
     (sc?'<div style="margin-top:12px">'+
       '<div style="display:flex;justify-content:space-between;font-size:11px;font-weight:700;margin-bottom:6px"><span style="color:var(--mu)">Your adventure match</span><span style="color:'+mColor(sc.overall)+'">'+sc.overall+'% — '+mLabel(sc.overall)+'</span></div>'+
       '<div class="mb" style="height:6px;margin-bottom:10px"><div class="mf" style="width:'+sc.overall+'%;background:'+mColor(sc.overall)+'"></div></div>'+
@@ -1639,7 +1806,7 @@ async function reqInterview(jid) {
       return;
     }
     console.error('reqInterview failed', e);
-    alert('Could not submit. Try again.');
+    showAlert({type:'error',title:'Could not submit',body:'Please try again.'});
     return;
   }
   showModal('<div style="text-align:center;padding:10px 0">' +
@@ -1660,7 +1827,7 @@ function rApplied(){
     return '<div class="card">'+
       '<div style="display:flex;justify-content:space-between;align-items:flex-start">'+
         '<div style="display:flex;gap:10px;align-items:center">'+
-          '<div class="el" style="width:38px;height:38px;font-size:20px">'+(e&&e.logo||"🏢")+'</div>'+
+          '<div class="el" style="width:38px;height:38px;font-size:20px">'+empLogo(e)+'</div>'+
           '<div><div style="font-family:Nunito,sans-serif;font-weight:700">'+(j&&j.title||"")+'</div>'+
           '<div style="color:var(--bl-dk);font-size:11px;font-weight:600">'+(e&&e.name||"")+'</div></div>'+
         '</div>'+bdg(a.status,STC[a.status])+'</div>'+
@@ -1885,7 +2052,7 @@ function rMsgs(){
     return '<div class="card" style="cursor:pointer" data-action="thread" data-id="'+a.id+'">'+
       '<div style="display:flex;justify-content:space-between;align-items:flex-start">'+
         '<div style="display:flex;gap:9px;align-items:center">'+
-          '<div class="el" style="width:34px;height:34px;font-size:17px">'+(e&&e.logo||"🏢")+'</div>'+
+          '<div class="el" style="width:34px;height:34px;font-size:17px">'+empLogo(e)+'</div>'+
           '<div><div style="font-family:Nunito,sans-serif;font-weight:700;font-size:13px">'+(e&&e.name||"")+'</div>'+
           '<div style="color:var(--mu);font-size:11px">'+(j&&j.title||"")+'</div></div></div>'+
         '<div style="text-align:right">'+bdg(a.status,STC[a.status])+'<div style="color:var(--mu);font-size:10px;margin-top:3px">'+(last&&last.ts||"")+'</div></div></div>'+
@@ -1901,7 +2068,7 @@ function rEmpList(){
   var e=currentEmployer();var mj=jobs.filter(function(j){return j.empId===e.id;});
   return '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div><div class="shd" style="margin:0;margin-bottom:2px">'+mj.length+' positions</div><div style="font-size:11px;color:var(--mu)">'+e.name+'</div></div><button class="btn btn-p btn-xs" data-action="addjob" data-id="'+e.id+'">+ Add position</button></div>'+
   mj.map(function(j){
-    return '<div class="lr" style="cursor:default"><div class="el">'+e.logo+'</div><div class="lb2"><div class="lt">'+j.title+'</div><div class="lm"><span>'+j.season+' · '+j.startMonth+'</span><span>'+j.salaryDisplay+'</span><span>'+j.filled+'/'+j.slots+' filled</span></div><div class="tr">'+(j.perks||[]).slice(0,3).map(function(p){return bdg(p,"bt");}).join("")+'</div></div>'+
+    return '<div class="lr" style="cursor:default"><div class="el">'+empLogo(e)+'</div><div class="lb2"><div class="lt">'+j.title+'</div><div class="lm"><span>'+j.season+' · '+j.startMonth+'</span><span>'+j.salaryDisplay+'</span><span>'+j.filled+'/'+j.slots+' filled</span></div><div class="tr">'+(j.perks||[]).slice(0,3).map(function(p){return bdg(p,"bt");}).join("")+'</div></div>'+
       '<div style="display:flex;flex-direction:column;align-items:center;gap:7px"><div class="sp '+(j.status==="open"?"sp-o":"sp-f")+'">'+j.status.toUpperCase()+'</div><button class="btn btn-xs" data-action="editjob" data-id="'+j.id+'">Edit</button></div></div>';
   }).join("");
 }
@@ -1923,9 +2090,21 @@ function rEmpCand(){
 }
 function rEmpProf(){
   var e=currentEmployer();
-  var empPhotos = '<div class="shd">Photos</div><div class="photo-grid">' + [0,1,2,3,4,5].map(function(i){var ph=getPhoto("emp-"+e.id+"-"+i);return '<div class="photo-slot">' + (ph?'<img src="'+ph+'" alt="">'  :'<div class="photo-slot-lbl"><span>&#128247;</span>'+["Location","Housing","Team","Workplace","Activities","Other"][i]+'</div>') + '<input type="file" class="photo-inp" data-photo="emp-'+e.id+'-'+i+'" accept="image/*"></div>';}).join("") + '</div><p style="font-size:10px;color:var(--mu);margin-bottom:12px">Click any slot to upload &#8212; photos appear on your job listings</p>';
+  // Read photos from the DB (employer.raw.photos[]) with photoStore as the
+  // optimistic-preview fallback during an in-flight upload. Keeps the slots
+  // populated after a page reload.
+  var rawPhotos = (e.raw && Array.isArray(e.raw.photos)) ? e.raw.photos : [];
+  var empPhotos = '<div class="shd">Photos</div><div class="photo-grid">' + [0,1,2,3,4,5].map(function(i){
+    var ph = getPhoto("emp-"+e.id+"-"+i) || rawPhotos[i];
+    return '<div class="photo-slot">' +
+      (ph
+        ? '<img src="'+ph+'" alt="">'
+        : '<div class="photo-slot-lbl"><span>&#128247;</span>'+["Location","Housing","Team","Workplace","Activities","Other"][i]+'</div>') +
+      '<input type="file" class="photo-inp" data-photo="emp-'+e.id+'-'+i+'" accept="image/*">'+
+    '</div>';
+  }).join("") + '</div><p style="font-size:10px;color:var(--mu);margin-bottom:12px">Click any slot to upload &#8212; photos appear on your job listings</p>';
   return '<div class="card"><div style="display:flex;justify-content:space-between;margin-bottom:10px">'+
-    '<div style="display:flex;gap:12px;align-items:center"><div style="font-size:40px">'+e.logo+'</div>'+
+    '<div style="display:flex;gap:12px;align-items:center"><div style="width:56px;height:56px;display:flex;align-items:center;justify-content:center;font-size:40px;overflow:hidden;border-radius:10px">'+empLogo(e)+'</div>'+
     '<div><div style="font-size:16px;font-family:Nunito,sans-serif;font-weight:800">'+e.name+'</div><div style="color:var(--mu);font-size:12px">'+e.region+'</div></div></div>'+
     '<button class="btn btn-xs" data-action="editemp" data-id="'+e.id+'">Edit</button></div>'+
     '<div class="tr">'+bdg(e.industry,IC[e.industry]||"bg")+(e.seasons||[]).map(function(s){return bdg(s,"bp");}).join("")+(e.verified?bdg("Verified","bt"):bdg("Pending","bc"))+'</div>'+
@@ -1950,27 +2129,55 @@ function rEmpMsgs(){
   }).join("");
 }
 function rAdmin(){
-  var tabs=[["overview","&#128202; Overview"],["students","&#127920; Participants"],["employers","&#127970; Employers"],["applications","&#128196; Applications"],["reviews","&#11088; Reviews"]];
+  var tabs=[["overview","&#128202; Overview"],["students","&#127920; Participants"],["employers","&#127970; Employers"],["applications","&#128196; Applications"],["reviews","&#11088; Reviews"],["settings","&#9881; Settings"]];
   var nav='<div class="subnav">'+tabs.map(function(t){return '<button class="snav'+(adminView===t[0]?" on":"")+'" data-action="adminnav" data-val="'+t[0]+'">'+t[1]+'</button>';}).join("")+'</div>';
   if(adminView==='empform')return rAdmEmpForm();
   if(adminView==='jobform')return rAdmJobForm();
-  return nav+{overview:rAdmOv,students:rAdmStu,employers:rAdmEmp,applications:rAdmApp,reviews:rAdmReviews}[adminView]();
+  return nav+{overview:rAdmOv,students:rAdmStu,employers:rAdmEmp,applications:rAdmApp,reviews:rAdmReviews,settings:rAdmSettings}[adminView]();
 }
 function rAdmOv(){
   var op=jobs.filter(function(j){return j.status==="open";}).length;
   var fi=jobs.filter(function(j){return j.status==="filled";}).length;
-  return '<div class="stat-row"><div class="sc"><div class="sc-n">'+students.length+'</div><div class="sc-l">Students</div></div><div class="sc"><div class="sc-n">'+employers.length+'</div><div class="sc-l">Employers</div></div><div class="sc"><div class="sc-n" style="color:var(--op)">'+op+'</div><div class="sc-l">Open</div></div><div class="sc"><div class="sc-n" style="color:var(--fi)">'+fi+'</div><div class="sc-l">Filled</div></div></div>'+
+  // Hidden participants are removed from the admin's attention surface — the
+  // overview counts only people who are visibility=true.
+  var visStudents = students.filter(function(s){return s.visibility;});
+  return '<div class="stat-row"><div class="sc"><div class="sc-n">'+visStudents.length+'</div><div class="sc-l">Students</div></div><div class="sc"><div class="sc-n">'+employers.length+'</div><div class="sc-l">Employers</div></div><div class="sc"><div class="sc-n" style="color:var(--op)">'+op+'</div><div class="sc-l">Open</div></div><div class="sc"><div class="sc-n" style="color:var(--fi)">'+fi+'</div><div class="sc-l">Filled</div></div></div>'+
   '<div class="c2" style="gap:12px"><div class="card"><div style="font-family:Nunito,sans-serif;font-weight:700;font-size:13px;margin-bottom:8px">By status</div>'+
   STATS.map(function(st){var n=allApps.filter(function(a){return a.status===st;}).length;return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px solid var(--brd)">'+bdg(st,STC[st])+'<span style="font-weight:700">'+n+'</span></div>';}).join("")+'</div>'+
   '<div class="card"><div style="font-family:Nunito,sans-serif;font-weight:700;font-size:13px;margin-bottom:8px">Pending actions</div>'+
   '<div style="font-size:12px;padding:5px 0;border-bottom:1px solid var(--brd)">'+bdg(allApps.filter(function(a){return a.status==="applied";}).length+' new requests',"ba")+' awaiting</div>'+
   '<div style="font-size:12px;padding:5px 0;border-bottom:1px solid var(--brd)">'+bdg(employers.filter(function(e){return !e.verified;}).length+' employers',"bc")+' need verification</div>'+
-  '<div style="font-size:12px;padding:5px 0">'+bdg(students.filter(function(s){return s.profileScore<70;}).length+' students',"ba")+' incomplete profiles</div></div></div>';
+  '<div style="font-size:12px;padding:5px 0">'+bdg(visStudents.filter(function(s){return s.profileScore<70;}).length+' students',"ba")+' incomplete profiles</div></div></div>';
 }
 function rAdmStu(){
-  return '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div class="shd" style="margin:0">Students ('+students.length+')</div><button class="btn btn-p btn-xs" data-action="addstudent">+ Add</button></div>'+
-  students.map(function(s){
-    return '<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start">'+
+  // Hidden participants are excluded from the default admin view (spec:
+  // "Profile visibility toggle (show/hide profile from admin view)"). The
+  // "Show hidden" toggle lets the admin reveal them so they can unhide
+  // someone or audit the full list.
+  var hiddenCount = students.filter(function(s){return !s.visibility;}).length;
+  var visList = adminShowHidden ? students : students.filter(function(s){return s.visibility;});
+  var toggleLbl = adminShowHidden
+    ? '👁 Hide hidden ('+hiddenCount+')'
+    : '👁 Show hidden ('+hiddenCount+')';
+  var toggleBtn = hiddenCount > 0
+    ? '<button class="btn btn-xs" data-action="togglehidden">'+toggleLbl+'</button>'
+    : '';
+
+  var header = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:8px;flex-wrap:wrap">'+
+    '<div class="shd" style="margin:0">Participants ('+visList.length+(adminShowHidden?'':' of '+students.length)+')</div>'+
+    '<div style="display:flex;gap:6px">'+toggleBtn+'</div>'+
+  '</div>';
+
+  if (visList.length === 0) {
+    return header + '<div class="card" style="text-align:center;padding:24px;color:var(--mu);font-size:12px">'+
+      (students.length === 0
+        ? 'No participants yet.'
+        : 'All participants are hidden. Click "Show hidden" above to view them.')+
+    '</div>';
+  }
+
+  return header + visList.map(function(s){
+    return '<div class="card"'+(!s.visibility?' style="opacity:.65"':'')+'><div style="display:flex;justify-content:space-between;align-items:flex-start">'+
       '<div><div style="font-family:Nunito,sans-serif;font-weight:700">'+s.name+'</div><div style="color:var(--mu);font-size:11px">'+s.age+' · '+s.location+'</div></div>'+
       '<div>'+bdg(s.profileScore+'%',"bb")+'&nbsp;'+(s.visibility?bdg("visible","bt"):bdg("hidden","bg"))+'</div></div>'+
       '<div class="prb" style="margin:6px 0"><div class="prf" style="width:'+s.profileScore+'%"></div></div>'+
@@ -1979,13 +2186,15 @@ function rAdmStu(){
       '<div style="margin-top:9px;display:flex;gap:5px;flex-wrap:wrap">'+
         '<button class="btn btn-xs" data-action="editstudent" data-id="'+s.id+'">Edit</button>'+
         '<button class="btn btn-xs btn-b" data-action="matchjobs" data-id="'+s.id+'">Match jobs</button>'+
-        '<button class="btn btn-xs '+(s.visibility?"btn-d":"btn-a")+'" data-action="vis" data-id="'+s.id+'">'+(s.visibility?"Hide":"Show")+'</button></div></div>';
+        '<button class="btn btn-xs '+(s.visibility?"btn-d":"btn-a")+'" data-action="vis" data-id="'+s.id+'">'+(s.visibility?"Hide":"Show")+'</button>'+
+        (s.profileScore<70?'<button class="btn btn-xs" style="background:var(--or-lt);border-color:var(--or);color:var(--or-dk)" data-action="flagincomplete" data-id="'+s.id+'">⚠ Flag incomplete</button>':"")+
+      '</div></div>';
   }).join("");
 }
 function rAdmEmp(){
   return '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div class="shd" style="margin:0">Employers ('+employers.length+')</div><div style="display:flex;gap:7px"><button class="btn btn-xs btn-b" data-action="addjob" data-id="0">+ Add job</button><button class="btn btn-p btn-xs" data-action="addemp">+ Add employer</button></div></div>'+
   employers.map(function(e){
-    return '<div class="lr" style="cursor:default"><div class="el" style="font-size:26px">'+e.logo+'</div><div class="lb2"><div class="lt">'+e.name+' '+(e.verified?bdg("Verified","bt"):bdg("Unverified","bc"))+'</div><div class="lm"><span>'+e.region+'</span><span>'+e.industry+'</span><span>'+jobs.filter(function(j){return j.empId===e.id;}).length+' listings</span><span>'+e.placements+' placed</span></div></div>'+
+    return '<div class="lr" style="cursor:default"><div class="el" style="font-size:26px;overflow:hidden">'+empLogo(e)+'</div><div class="lb2"><div class="lt">'+e.name+' '+(e.verified?bdg("Verified","bt"):bdg("Unverified","bc"))+'</div><div class="lm"><span>'+e.region+'</span><span>'+e.industry+'</span><span>'+jobs.filter(function(j){return j.empId===e.id;}).length+' listings</span><span>'+e.placements+' placed</span></div></div>'+
       '<div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end">'+
         '<button class="btn btn-xs" data-action="editemp" data-id="'+e.id+'">Edit</button>'+
         (!e.verified?'<button class="btn btn-xs btn-a" data-action="verify" data-id="'+e.id+'">Verify</button>':"")+
@@ -2194,7 +2403,7 @@ function deleteReview(revId) {
         var r = await window.sb.from('reviews').delete().eq('id', revId);
         if (r.error) throw r.error;
       } catch(e) {
-        alert('Delete failed: ' + e.message);
+        showAlert({type:'error',title:'Delete failed',body:e.message});
         return;
       }
       await hydrateAndRender();
@@ -2230,43 +2439,81 @@ function runConfirm() {
   closeModal();
   if (typeof cb === 'function') cb();
 }
+
+// Plain-text escape for content interpolated into modal HTML. Error messages
+// from Supabase / Postgres often contain quotes and angle brackets and can
+// otherwise break the modal markup or open an XSS hole.
+function escHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// Styled replacement for native alert(). One OK button, type-themed icon.
+// Usage: showAlert({ type:'success'|'error'|'info'|'warning', title, body, label })
+function showAlert(opts) {
+  opts = opts || {};
+  var type = opts.type || 'info';
+  var defaultIcon = { success:'&#10003;', error:'&#10005;', info:'&#8505;', warning:'&#9888;' }[type] || '&#8505;';
+  var defaultTitle = { success:'Success', error:'Something went wrong', info:'Heads up', warning:'Heads up' }[type] || '';
+  var icon = opts.icon || defaultIcon;
+  var title = escHtml(opts.title || defaultTitle);
+  var body = escHtml(opts.body || '');
+  var label = escHtml(opts.label || 'OK');
+  showModal(
+    '<div style="text-align:center;padding:4px 0">' +
+      '<div class="confirm-icon '+type+'">'+icon+'</div>' +
+      '<div style="font-family:Nunito,sans-serif;font-weight:800;font-size:16px;margin-bottom:8px">'+title+'</div>' +
+      (body ? '<p style="font-size:12px;color:var(--mu);line-height:1.6;margin-bottom:16px">'+body+'</p>' : '') +
+      '<div style="display:flex;gap:8px;justify-content:center">' +
+        '<button class="btn btn-xs btn-p" data-action="closemod">'+label+'</button>' +
+      '</div>' +
+    '</div>'
+  );
+}
 function openAdminPhotoModal(empId) {
   var e = E(empId);
   if (!e) return;
-  var empJobs = jobs.filter(function(j){return j.empId===empId;});
-  var html = '<h3>📸 Manage photos — '+e.name+'</h3>';
-  
-  html += '<div style="font-size:11px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Employer photos (appear on profile + listings)</div>';
-  html += '<div class="photo-grid" style="grid-template-columns:repeat(3,1fr)">';
+  // Resolve a slot's image URL: prefer the just-uploaded preview in photoStore,
+  // fall back to the persisted URL in e.photos / e.logo. This is what makes
+  // the modal show real images after a re-open / page reload.
+  function resolveSlot(key, fallback){ return getPhoto(key) || fallback || ''; }
+  var rawPhotos = (e.raw && Array.isArray(e.raw.photos)) ? e.raw.photos : [];
+  var logoUrl = resolveSlot("emp-logo-"+empId, (e.raw && e.raw.logo_url) || '');
+
+  var html = '<h3 style="margin-bottom:6px">📸 Manage photos — '+e.name+'</h3>'+
+    '<p style="font-size:11px;color:var(--mu);margin:0 0 16px">Click any tile to upload. JPG/PNG/WebP up to 4MB. Photos are auto-resized.</p>';
+
+  // ---- Primary logo / profile photo ----
+  html += '<div style="font-size:11px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Profile photo / logo</div>'+
+    '<div style="display:flex;align-items:center;gap:14px;margin-bottom:18px">'+
+      '<div class="photo-slot logo">'+
+        (logoUrl
+          ? '<img src="'+logoUrl+'" alt=""><button class="photo-remove" data-action="rmphoto" data-id="logo-'+empId+'" title="Remove">×</button>'
+          : '<div class="photo-slot-lbl"><span>🏢</span>Upload logo</div>')+
+        '<input type="file" class="photo-inp" data-photo="emp-logo-'+empId+'" accept="image/*">'+
+      '</div>'+
+      '<div style="font-size:12px;color:var(--mu);max-width:200px;line-height:1.4">Used as the small badge next to the employer name across the portal.</div>'+
+    '</div>';
+
+  // ---- Gallery slots ----
+  html += '<div style="font-size:11px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Gallery photos (appear on profile + listings)</div>';
+  html += '<div class="photo-grid">';
+  var labels = ["Location","Housing","Team","Workplace","Activities","Other"];
   [0,1,2,3,4,5].forEach(function(i){
-    var ph = getPhoto("emp-"+empId+"-"+i);
-    var labels = ["Location","Housing","Team","Workplace","Activities","Other"];
-    html += '<div class="photo-slot">';
-    html += ph ? '<img src="'+ph+'" alt="">' : '<div class="photo-slot-lbl"><span>📷</span>'+labels[i]+'</div>';
-    html += '<input type="file" class="photo-inp" data-photo="emp-'+empId+'-'+i+'" accept="image/*">';
-    html += '</div>';
+    var ph = resolveSlot("emp-"+empId+"-"+i, rawPhotos[i]);
+    html += '<div class="photo-slot">'+
+      (ph
+        ? '<img src="'+ph+'" alt=""><button class="photo-remove" data-action="rmphoto" data-id="gallery-'+empId+'-'+i+'" title="Remove">×</button>'
+        : '<div class="photo-slot-lbl"><span>📷</span>'+labels[i]+'</div>')+
+      '<input type="file" class="photo-inp" data-photo="emp-'+empId+'-'+i+'" accept="image/*">'+
+    '</div>';
   });
   html += '</div>';
 
-  if (empJobs.length) {
-    html += '<div class="dv"></div>';
-    html += '<div style="font-size:11px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">Job listing photos</div>';
-    empJobs.forEach(function(j){
-      html += '<div style="font-size:12px;font-weight:700;font-family:Nunito,sans-serif;margin-bottom:6px">'+j.title+'</div>';
-      html += '<div class="photo-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">';
-      [0,1,2].forEach(function(i){
-        var ph = getPhoto("job-"+j.id+"-"+i);
-        var jlabels = ["Main","Housing","Workplace"];
-        html += '<div class="photo-slot">';
-        html += ph ? '<img src="'+ph+'" alt="">' : '<div class="photo-slot-lbl"><span>📷</span>'+jlabels[i]+'</div>';
-        html += '<input type="file" class="photo-inp" data-photo="job-'+j.id+'-'+i+'" accept="image/*">';
-        html += '</div>';
-      });
-      html += '</div>';
-    });
-  }
-
-  html += '<div class="mf2"><button class="btn btn-xs" data-action="closemod">Done</button></div>';
+  html += '<div class="mf2"><button class="btn btn-p btn-xs" data-action="closemod">Done</button></div>';
+  // Track the empId so the upload handler can re-open the same modal to refresh.
+  window._adminPhotoEmpId = empId;
   showModal(html);
 }
 // Tracks the currently-open message thread so realtime knows whether to
@@ -2426,7 +2673,7 @@ async function sendMsg(id){
     }
   } catch(e) {
     console.error('sendMsg failed', e);
-    alert('Send failed: '+e.message);
+    showAlert({type:'error',title:'Send failed',body:e.message});
     return;
   }
 }
@@ -2448,7 +2695,7 @@ async function toggleFav(jid){
 }
 async function updateAppAll(id,status){
   try { await window.DB.setApplicationStatus(id, status); }
-  catch(e) { console.error('update status failed', e); alert('Update failed: '+e.message); return; }
+  catch(e) { console.error('update status failed', e); showAlert({type:'error',title:'Update failed',body:e.message}); return; }
   await hydrateAndRender();
 }
 async function acceptOffer(id){ await updateAppAll(id,'placed'); }
@@ -2459,7 +2706,7 @@ async function toggleVis(sid){
   try {
     var r = await window.sb.from('profiles').update({visibility:next}).eq('id', sid);
     if(r.error) throw r.error;
-  } catch(e) { console.error('toggleVis failed', e); alert('Update failed: '+e.message); return; }
+  } catch(e) { console.error('toggleVis failed', e); showAlert({type:'error',title:'Update failed',body:e.message}); return; }
   await hydrateAndRender();
 }
 async function verifyEmp(eid){
@@ -2467,8 +2714,100 @@ async function verifyEmp(eid){
   try {
     var r = await window.sb.from('employers').update({verified:true}).eq('id', eid);
     if(r.error) throw r.error;
-  } catch(e) { console.error('verify failed', e); alert('Verify failed: '+e.message); return; }
+  } catch(e) { console.error('verify failed', e); showAlert({type:'error',title:'Verify failed',body:e.message}); return; }
   await hydrateAndRender();
+}
+
+// Flag a participant whose profile is under 70% complete. Fans an
+// `incomplete_profile_reminder` notification out to every admin — the email
+// template + bell entry then surface the case for outreach.
+async function flagIncompleteProfile(sid){
+  var s = S(sid);
+  if(!s) return;
+  try {
+    var admins = await window.sb.from('profiles').select('id').eq('role','admin');
+    var adminIds = (admins.data||[]).map(function(r){return r.id;});
+    if(!adminIds.length){showAlert({type:'warning',title:'No admins to notify',body:'There are no admin accounts in the system right now.'});return;}
+    await window.Notify.notifyAdmin('incomplete_profile_reminder',
+      { participant_name: s.name, profile_score: s.profileScore || 0 },
+      adminIds
+    );
+    showAlert({type:'success',title:'Participant flagged',body:adminIds.length+' admin'+(adminIds.length===1?'':'s')+' notified — they’ll see a bell alert and receive an email.'});
+  } catch(e) { console.error('flag incomplete failed', e); showAlert({type:'error',title:'Could not flag',body:e.message||String(e)}); }
+}
+
+// ---- Notification settings (per-admin in-system + email opt-out) ----
+async function saveNotifSettings(){
+  if(!currentUser) return;
+  var inSys = (document.getElementById('ns-insys')||{}).checked;
+  var email = (document.getElementById('ns-email')||{}).checked;
+  try {
+    await window.Notify.setNotificationSetting(currentUser.id, 'in_system_enabled', !!inSys);
+    await window.Notify.setNotificationSetting(currentUser.id, 'email_enabled', !!email);
+    // Mirror the new values onto currentUser.raw.notification_settings so the
+    // bell mutes/unmutes immediately, no refetch needed. bellEnabled() reads
+    // from here.
+    if (currentUser.raw) {
+      var ns = currentUser.raw.notification_settings;
+      var row = Array.isArray(ns) ? ns[0] : ns;
+      if (!row) {
+        row = { in_system_enabled: !!inSys, email_enabled: !!email };
+        currentUser.raw.notification_settings = row;
+      } else {
+        row.in_system_enabled = !!inSys;
+        row.email_enabled = !!email;
+      }
+    }
+    // Keep the lazy-loaded modal state consistent so the checkboxes don't snap
+    // back if the admin clicks the tab again before navigating away.
+    if (window._adminNotifSettings) {
+      window._adminNotifSettings.in_system_enabled = !!inSys;
+      window._adminNotifSettings.email_enabled = !!email;
+    }
+    var status = document.getElementById('ns-status');
+    if(status) status.textContent = 'Saved ✓';
+    // Re-render so the bell badge updates without a page refresh.
+    render();
+  } catch(e) { console.error('save notif settings failed', e); showAlert({type:'error',title:'Could not save preferences',body:e.message||String(e)}); }
+}
+function rAdmSettings(){
+  var s = window._adminNotifSettings;
+  if(!s) {
+    // Lazy-load the row, then re-render. Same pattern as other "fetch on
+    // view open" admin tabs — keeps the render loop synchronous.
+    if(!window._adminNotifLoading && currentUser){
+      window._adminNotifLoading = true;
+      window.Notify.getNotificationSettings(currentUser.id).then(function(row){
+        window._adminNotifSettings = row;
+        window._adminNotifLoading = false;
+        render();
+      }).catch(function(e){
+        console.error('getNotificationSettings failed', e);
+        window._adminNotifLoading = false;
+        window._adminNotifSettings = { in_system_enabled: true, email_enabled: true };
+        render();
+      });
+    }
+    return '<div style="padding:32px;text-align:center;color:var(--mu);font-size:13px">Loading preferences…</div>';
+  }
+  return '<div class="card" style="max-width:520px">'+
+    '<div class="card-title">Notification preferences</div>'+
+    '<p style="font-size:12px;color:var(--mu);margin:6px 0 14px">Toggle off to mute the bell or stop receiving emails for this account. Applies to your own account only.</p>'+
+    '<label style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--brd)">'+
+      '<input type="checkbox" id="ns-insys"'+(s.in_system_enabled?' checked':'')+'>'+
+      '<div><div style="font-weight:600;font-size:13px">In-system notifications</div>'+
+      '<div style="font-size:11px;color:var(--mu)">Bell icon &amp; inbox alerts</div></div>'+
+    '</label>'+
+    '<label style="display:flex;align-items:center;gap:10px;padding:10px 0">'+
+      '<input type="checkbox" id="ns-email"'+(s.email_enabled?' checked':'')+'>'+
+      '<div><div style="font-weight:600;font-size:13px">Email notifications</div>'+
+      '<div style="font-size:11px;color:var(--mu)">Sent via Resend whenever an in-system event fires</div></div>'+
+    '</label>'+
+    '<div style="display:flex;align-items:center;gap:10px;margin-top:14px">'+
+      '<button class="btn btn-p btn-xs" data-action="savenotifsettings">Save preferences</button>'+
+      '<span id="ns-status" style="font-size:12px;color:var(--mu)"></span>'+
+    '</div>'+
+  '</div>';
 }
 // Debounced save to program_profile. Mutates local state immediately so the
 // UI is snappy, then upserts to Supabase 400ms after the last edit. The DB
@@ -2535,10 +2874,10 @@ function toggleChip(el) {
     el.classList.toggle('on');
     return;
   }
-  // Job form chips (jf_ prefix) - toggle .on visually, enforce single for season
+  // Job form chips (jf_ prefix) - toggle .on visually, enforce single for season/env/savings
   if(field && field.startsWith('jf_')) {
-    if(field === 'jf_season') {
-      document.querySelectorAll('[data-field="jf_season"]').forEach(function(c){ c.classList.remove('on'); });
+    if(field === 'jf_season' || field === 'jf_env' || field === 'jf_savings') {
+      document.querySelectorAll('[data-field="'+field+'"]').forEach(function(c){ c.classList.remove('on'); });
     }
     el.classList.toggle('on');
     return;
@@ -2600,112 +2939,7 @@ async function saveProfile(){
   };
   try {
     await window.DB.updateProfile(currentUser.id, patch);
-  } catch(e) { console.error('saveProfile failed', e); alert('Save failed: '+e.message); return; }
-  closeModal();
-  await hydrateAndRender();
-}
-function openAddJobModal(eid){
-  showModal('<h3>Add position</h3>'+
-    '<div class="c2"><div><span class="fl">Title</span><input type="text" id="jf-t"></div><div><span class="fl">Pay</span><input type="text" id="jf-p"></div></div>'+
-    '<div class="c2"><div><span class="fl">Season</span><select id="jf-s">'+SEAS.map(function(s){return '<option>'+s+'</option>';}).join("")+'</select></div>'+
-    '<div><span class="fl">Start month</span><select id="jf-sm">'+MONS.map(function(m){return '<option>'+m+'</option>';}).join("")+'</select></div></div>'+
-    '<div class="c2"><div><span class="fl">Duration</span><input type="text" id="jf-dur" placeholder="e.g. 3 months"></div><div><span class="fl">Hrs/week</span><input type="number" id="jf-hrs"></div></div>'+
-    '<div class="c2"><div><span class="fl">CPI (0-15)</span><input type="number" step=".1" id="jf-cpi"></div><div><span class="fl">Slots</span><input type="number" id="jf-sl" value="1"></div></div>'+
-    '<div class="c2"><div><span class="fl">Experience</span><select id="jf-exp"><option>none</option><option>preferred</option><option>required</option></select></div><div><span class="fl">Job type</span><input type="text" id="jf-type"></div></div>'+
-    '<span class="fl">Perks (comma-sep)</span><input type="text" id="jf-perks">'+
-    '<span class="fl">Requirements</span><textarea id="jf-req"></textarea>'+
-    '<div class="c2"><div><span class="fl">Housing type</span><input type="text" id="jf-ht"></div><div><span class="fl">Housing cost</span><input type="text" id="jf-hc"></div></div>'+
-    '<span class="fl">Meals</span><input type="text" id="jf-hm">'+
-    '<div class="mf2"><button class="btn btn-xs" data-action="closemod">Cancel</button><button class="btn btn-xs btn-p" data-action="savejob" data-id="'+eid+'" data-id2="0">Add</button></div>');
-}
-function openEditJobModal(jid){
-  var j=J(jid);
-  showModal('<h3>Edit position</h3>'+
-    '<div class="c2"><div><span class="fl">Title</span><input type="text" id="jf-t" value="'+j.title+'"></div><div><span class="fl">Pay</span><input type="text" id="jf-p" value="'+j.pay+'"></div></div>'+
-    '<div class="c2"><div><span class="fl">Season</span><select id="jf-s">'+SEAS.map(function(s){return '<option'+(s===j.season?" selected":"")+'>'+s+'</option>';}).join("")+'</select></div>'+
-    '<div><span class="fl">Start month</span><select id="jf-sm">'+MONS.map(function(m){return '<option'+(m===j.startMonth?" selected":"")+'>'+m+'</option>';}).join("")+'</select></div></div>'+
-    '<div class="c2"><div><span class="fl">Duration</span><input type="text" id="jf-dur" value="'+j.duration+'"></div><div><span class="fl">Hrs/wk</span><input type="number" id="jf-hrs" value="'+j.hrs+'"></div></div>'+
-    '<div class="c2"><div><span class="fl">CPI</span><input type="number" step=".1" id="jf-cpi" value="'+j.cpi+'"></div><div><span class="fl">Slots</span><input type="number" id="jf-sl" value="'+j.slots+'"></div></div>'+
-    '<div class="c2"><div><span class="fl">Experience</span><select id="jf-exp"><option'+(j.experience==="none"?" selected":"")+'>none</option><option'+(j.experience==="preferred"?" selected":"")+'>preferred</option><option'+(j.experience==="required"?" selected":"")+'>required</option></select></div>'+
-    '<div><span class="fl">Job type</span><input type="text" id="jf-type" value="'+j.type+'"></div></div>'+
-    '<span class="fl">Perks (comma-sep)</span><input type="text" id="jf-perks" value="'+(j.perks||[]).join(",")+'">'+
-    '<span class="fl">Requirements</span><textarea id="jf-req">'+j.requirements+'</textarea>'+
-    '<div class="c2"><div><span class="fl">Housing type</span><input type="text" id="jf-ht" value="'+j.housing.type+'"></div><div><span class="fl">Cost</span><input type="text" id="jf-hc" value="'+j.housing.cost+'"></div></div>'+
-    '<span class="fl">Meals</span><input type="text" id="jf-hm" value="'+j.housing.meals+'">'+
-    '<div class="mf2"><button class="btn btn-xs" data-action="closemod">Cancel</button><button class="btn btn-xs btn-p" data-action="savejob" data-id="'+j.empId+'" data-id2="'+j.id+'">Save</button></div>');
-}
-async function saveJob(eid,jid){
-  var t=document.getElementById("jf-t").value.trim();if(!t)return;
-  function num(id){var n=parseFloat(document.getElementById(id).value);return isNaN(n)?null:n;}
-  function int(id){var n=parseInt(document.getElementById(id).value,10);return isNaN(n)?null:n;}
-  function strOrNull(s){return s?s.trim()||null:null;}
-  function enumOr(v,allowed){return allowed.indexOf(v)>=0?v:null;}
-  var pay=document.getElementById("jf-p").value;
-  var patch={
-    employer_id: eid,
-    title: t,
-    pay_rate: parseFloat(pay) || 0,
-    season: enumOr(document.getElementById("jf-s").value, ['winter','spring','summer','fall','year-round']),
-    start_month: strOrNull(document.getElementById("jf-sm").value),
-    hours_per_week: int("jf-hrs"),
-    positions: int("jf-sl") || 1,
-    experience: enumOr(document.getElementById("jf-exp").value, ['none','preferred','required']),
-    qualifications: strOrNull(document.getElementById("jf-req").value),
-    housing_type: strOrNull(document.getElementById("jf-ht").value),
-    housing_cost: num("jf-hc"),
-    meals: strOrNull(document.getElementById("jf-hm").value),
-    env: 'mountain',
-    job_roles: ['hospitality'],
-    hobbies: [],
-    savings_level: 'mid',
-    status: 'open',
-  };
-  try {
-    if (jid && jid !== '0' && jid !== 0) {
-      var r = await window.sb.from('jobs').update(patch).eq('id', jid);
-      if(r.error) throw r.error;
-    } else {
-      var r = await window.sb.from('jobs').insert(patch);
-      if(r.error) throw r.error;
-    }
-  } catch(e) { console.error('save job failed', e); alert('Save failed: '+e.message); return; }
-  closeModal();
-  await hydrateAndRender();
-}
-function openEditEmpModal(eid){
-  var e=E(eid)||{};
-  showModal('<h3>'+(eid?"Edit":"Add")+' employer</h3>'+
-    '<div class="c2"><div><span class="fl">Name</span><input type="text" id="ef-n" value="'+(e.name||"")+'"></div><div><span class="fl">Logo emoji</span><input type="text" id="ef-l" value="'+(e.logo||"🏢")+'" style="width:60px"></div></div>'+
-    '<div class="c2"><div><span class="fl">Industry</span><select id="ef-i">'+INDS.map(function(i){return '<option'+(i===e.industry?" selected":"")+'>'+i+'</option>';}).join("")+'</select></div>'+
-    '<div><span class="fl">State</span><select id="ef-st">'+REGS.map(function(r){return '<option'+(r===e.state?" selected":"")+'>'+r+'</option>';}).join("")+'</select></div></div>'+
-    '<span class="fl">Region / location</span><input type="text" id="ef-r" value="'+(e.region||"")+'">'+
-    '<span class="fl">Description</span><textarea id="ef-d">'+(e.desc||"")+'</textarea>'+
-    '<div class="c2"><div><span class="fl">Housing</span><select id="ef-h"><option'+(e.housing==="provided"?" selected":"")+'>provided</option><option'+(e.housing==="adventureexp"?" selected":"")+'>adventureexp</option><option'+(e.housing==="none"?" selected":"")+'>not provided</option></select></div>'+
-    '<div><span class="fl">Seasons (comma-sep)</span><input type="text" id="ef-s" value="'+(e.seasons||[]).join(",")+'"></div></div>'+
-    '<span class="fl">Perks (comma-sep)</span><input type="text" id="ef-p" value="'+(e.perks||[]).join(",")+'">'+
-    '<span class="fl">Lifestyle tags (comma-sep)</span><input type="text" id="ef-li" value="'+(e.lifestyle||[]).join(",")+'">'+
-    '<div class="mf2"><button class="btn btn-xs" data-action="closemod">Cancel</button><button class="btn btn-xs btn-p" data-action="saveemp" data-id="'+(eid||0)+'">Save</button></div>');
-}
-function openAddEmpModal(){openEditEmpModal(null);}
-async function saveEmp(eid){
-  var n=document.getElementById("ef-n").value.trim();if(!n)return;
-  var patch = {
-    name: n,
-    industry: document.getElementById("ef-i").value || null,
-    state: document.getElementById("ef-st").value || null,
-    region: document.getElementById("ef-r").value || null,
-    description: document.getElementById("ef-d").value || null,
-    housing_desc: document.getElementById("ef-h").value || null,
-  };
-  try {
-    if (eid && eid !== '0' && eid !== 0) {
-      var r = await window.sb.from('employers').update(patch).eq('id', eid);
-      if(r.error) throw r.error;
-    } else {
-      var r = await window.sb.from('employers').insert(patch);
-      if(r.error) throw r.error;
-    }
-  } catch(e) { console.error('save failed', e); alert('Save failed: '+e.message); return; }
+  } catch(e) { console.error('saveProfile failed', e); showAlert({type:'error',title:'Save failed',body:e.message}); return; }
   closeModal();
   await hydrateAndRender();
 }
@@ -2725,27 +2959,6 @@ function saveAdminStudent(sid){
   s.visibility=document.getElementById("as-v").value==="1";
   closeModal();render();
 }
-function openAddStudentModal(){
-  showModal('<h3>Add student</h3>'+
-    '<div class="c2"><div><span class="fl">First name</span><input type="text" id="ns-fn"></div><div><span class="fl">Last name</span><input type="text" id="ns-ln"></div></div>'+
-    '<div class="c2"><div><span class="fl">Age</span><input type="number" id="ns-age"></div><div><span class="fl">Location</span><input type="text" id="ns-loc"></div></div>'+
-    '<span class="fl">Eligibility</span><input type="text" id="ns-el" placeholder="US citizen">'+
-    '<div class="mf2"><button class="btn btn-xs" data-action="closemod">Cancel</button><button class="btn btn-xs btn-p" data-action="doaddstudent">Add</button></div>');
-}
-function addStudent(){
-  // Admins cannot create participant accounts directly — Supabase Auth users
-  // must be created through the participant signup form (or via the Supabase
-  // dashboard's "Add user" if absolutely necessary). Show a message instead.
-  closeModal();
-  showModal(
-    '<h3>Add participant</h3>' +
-    '<p style="font-size:13px;color:var(--mu);line-height:1.6;margin:8px 0 14px">' +
-      'Participants create their own account through the public signup page. ' +
-      'Share the portal link with them and they will appear here once they sign up.' +
-    '</p>' +
-    '<div class="mf2"><button class="btn btn-p btn-xs" data-action="closemod">Got it</button></div>'
-  );
-}
 function openMatchModal(sid){
   var s=S(sid);var p=s.pd;
   var scored=jobs.filter(function(j){return j.status==="open";}).map(function(j){return Object.assign({score:(p.roles&&p.roles.length||p.envs&&p.envs.length)?scoreJob(j,p):{overall:50,cats:[50,50,50,50,50]}},j);}).sort(function(a,b){return b.score.overall-a.score.overall;});
@@ -2761,14 +2974,18 @@ function openMatchModal(sid){
 }
 async function adminPlace(sid,jid){
   if(!sid||!jid)return;
-  if(allApps.find(function(a){return a.studentId===sid&&a.jobId===jid;})){
-    closeModal();
-    return;
-  }
+  // Direct insert is blocked by RLS (applications_insert_own restricts inserts
+  // to the participant themselves). The admin_place_participant RPC runs as
+  // SECURITY DEFINER, gates on is_admin(), upserts the application row, and
+  // bumps jobs.filled — same path place_application() uses for the
+  // already-applied case.
   try {
-    var r = await window.sb.from('applications').insert({participant_id:sid, job_id:jid, status:'placed'});
+    var r = await window.sb.rpc('admin_place_participant', {
+      p_participant: sid,
+      p_job: jid,
+    });
     if(r.error) throw r.error;
-  } catch(e) { console.error('adminPlace failed', e); alert('Place failed: '+e.message); return; }
+  } catch(e) { console.error('adminPlace failed', e); showAlert({type:'error',title:'Place failed',body:e.message||String(e)}); return; }
   closeModal();
   await hydrateAndRender();
 }
@@ -2866,6 +3083,7 @@ function rAdmEmpForm(){
   html += field('contact_phone','Phone number','tel','(555) 555-5555',e.contactPhone||'');
   html += textarea('desc','Company description','What does your company do? What is the culture like?',e.desc||'');
   html += field('website','Company website','url','https://yourcompany.com',e.website||'');
+  html += select('industry','Industry',INDS.map(function(i){return [i, i.charAt(0).toUpperCase()+i.slice(1)];}),e.industry||'hospitality');
 
   html += section('&#128205; Location');
   html += field('address','Employer address','text','Street address',e.address||'');
@@ -2948,7 +3166,7 @@ function rAdmEmpForm(){
 
 async function saveEmpFull(eid) {
   var name = (document.getElementById('ef-name')||{}).value||'';
-  if(!name.trim()){alert('Please enter the employer name.');return;}
+  if(!name.trim()){showAlert({type:'warning',title:'Missing employer name',body:'Please enter the employer’s legal name before saving.'});return;}
 
   function v(id){var el=document.getElementById('ef-'+id);return el?el.value.trim():'';}
   function chipVals(field){return [...document.querySelectorAll('[data-field="ef_'+field+'"].chip.on')].map(function(el){return el.dataset.val;});}
@@ -2968,7 +3186,7 @@ async function saveEmpFull(eid) {
     phone: strOrNull(v('contact_phone')),
     description: strOrNull(v('desc')),
     website: strOrNull(v('website')),
-    industry: 'hospitality',
+    industry: strOrNull(v('industry')) || 'hospitality',
     address: strOrNull(v('address')),
     city: strOrNull(city),
     state: strOrNull(state),
@@ -2996,8 +3214,9 @@ async function saveEmpFull(eid) {
     hiring_end_month: strOrNull(v('end_month')),
   };
 
+  var wasNew = !(eid && eid !== '0' && eid !== 0);
   try {
-    if (eid && eid !== '0' && eid !== 0) {
+    if (!wasNew) {
       var u = await window.sb.from('employers').update(patch).eq('id', eid);
       if (u.error) throw u.error;
     } else {
@@ -3006,8 +3225,25 @@ async function saveEmpFull(eid) {
     }
   } catch (e) {
     console.error('save employer failed', e);
-    alert('Save failed: ' + (e.message || 'unknown error'));
+    showAlert({type:'error',title:'Save failed',body:e.message||'unknown error'});
     return;
+  }
+
+  // New employers default to verified=false (per DB column default). Fan a
+  // verification-request notification out to every admin so the bell + email
+  // surface the pending verification — the "needs verification" count on the
+  // overview is passive and easy to miss.
+  if (wasNew && window.Notify) {
+    try {
+      var admins = await window.sb.from('profiles').select('id').eq('role','admin');
+      var adminIds = (admins.data || []).map(function(r){return r.id;});
+      if (adminIds.length) {
+        await window.Notify.notifyAdmin('employer_verification_request',
+          { employer_name: patch.name },
+          adminIds
+        );
+      }
+    } catch (e) { console.warn('notify employer_verification_request failed', e); }
   }
 
   window._empFormData = null;
@@ -3018,17 +3254,56 @@ async function saveEmpFull(eid) {
 
 
 function rAdmJobForm(){
-  var empId = window._jobEmpId||0;
+  var jid = adminJobFormId||0;
+  var j = jid ? J(jid) : null;
+  var isEdit = !!j;
+  var empId = window._jobEmpId || (j && j.empId) || 0;
   var empOpts = '<option value="">Select employer...</option>'+employers.map(function(e){
     return '<option value="'+e.id+'"'+(empId===e.id?' selected':'')+'>'+e.name+'</option>';
   }).join('');
 
-  var SEAS=['Winter','Spring','Summer','Fall','Year-round'];
-  var MONS=["January","February","March","April","May","June","July","August","September","October","November","December"];
+  // Pull seeded values from existing job for edit mode.
+  var seed = j ? {
+    title:j.title||'', desc:j.description||'',
+    qual:j.requirements||'', pay:(j.pay||'').toString().replace(/[^\d.]/g,''),
+    slots:j.slots||1, hrs:j.hrs||40, exp:j.experience||'none',
+    sm:j.startMonth||'', em:j.endMonth||'',
+    season:j.season||'', env:j.env||'', savingsLevel:j.savingsLevel||'',
+    ht:j.housing&&j.housing.type||'', hc:(j.housing&&j.housing.cost||'').toString().replace(/[^\d.]/g,''),
+    hm:j.housing&&j.housing.meals||'',
+    requiresLicense:!!j.requiresLicense, requiresPassport:!!j.requiresPassport,
+    isTipped:!!j.isTipped,
+    jobRoles:j.jobRoles||[], hobbies:j.hobbies||[],
+  } : { jobRoles:[], hobbies:[] };
+
+  var SEAS=['winter','spring','summer','fall','year-round'];
+  var ENVS=[['mountain','&#127956; Mountain'],['coastal','&#127944; Coastal'],['national-park','&#127795; National park / rural'],['small-town','&#127960; Small town'],['city','&#127749; City']];
+  var SAVS=[['low','Low ($0–2k)'],['mid','Mid ($2–4k)'],['high','High ($4k+)']];
+  // Mirror the role + hobby options participants choose from in rMatchIntake
+  // so matching has any chance of overlapping.
+  var ROLE_OPTS=[
+    ['guest-services','Guest Services / Front Desk'],['food-bev','Food &amp; Beverage'],
+    ['kitchen','Kitchen / Cook / Prep'],['housekeeping','Housekeeping'],
+    ['maintenance','Maintenance'],['retail','Retail'],
+    ['outdoor','Ski / Activity Support'],['labor','General Labor'],
+  ];
+  var HOBBY_OPTS=[
+    ['Skiing','Skiing / snowboarding'],['Hiking','Hiking / outdoors'],
+    ['Water sports','Water activities'],['Fitness','Fitness / gyms'],
+    ['Arts','Arts / music'],['Social scene','Social scene'],
+  ];
+
+  function chipBlock(field, opts, selected){
+    return '<div class="cg">'+opts.map(function(o){
+      var v=o[0], l=o[1];
+      var on=(selected||[]).indexOf(v)>=0;
+      return '<div class="chip'+(on?' on':'')+'" data-action="chip" data-field="jf_'+field+'" data-val="'+v+'">'+l+'</div>';
+    }).join('')+'</div>';
+  }
 
   return '<button class="bkb" data-action="adminnav" data-val="employers">&#8592; Back to employers</button>'+
-    '<div style="font-family:Nunito,sans-serif;font-size:20px;font-weight:900;margin-bottom:4px">Add a Job Listing</div>'+
-    '<div style="font-size:12px;color:var(--mu);margin-bottom:20px">Create a new position and link it to an existing employer.</div>'+
+    '<div style="font-family:Nunito,sans-serif;font-size:20px;font-weight:900;margin-bottom:4px">'+(isEdit?'Edit Job Listing':'Add a Job Listing')+'</div>'+
+    '<div style="font-size:12px;color:var(--mu);margin-bottom:20px">All fields below feed the matching algorithm — fill them in carefully.</div>'+
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start">'+
 
     // LEFT
@@ -3037,69 +3312,91 @@ function rAdmJobForm(){
     '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:5px">Employer</label>'+
     '<select id="jf-emp" class="ainp" style="margin-bottom:0">'+empOpts+'</select></div>'+
     '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:5px">Position title</label>'+
-    '<input type="text" id="jf-t" class="ainp" placeholder="e.g. Front Desk Agent, Trail Guide, Lift Operator"></div>'+
+    '<input type="text" id="jf-t" class="ainp" placeholder="e.g. Front Desk Agent, Trail Guide, Lift Operator" value="'+(seed.title||'')+'"></div>'+
     '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:5px">Position description</label>'+
-    '<textarea id="jf-desc" class="ainp" placeholder="Describe day-to-day responsibilities, team culture, what makes this role unique..." style="min-height:100px"></textarea></div>'+
+    '<textarea id="jf-desc" class="ainp" placeholder="Describe day-to-day responsibilities, team culture, what makes this role unique..." style="min-height:100px">'+(seed.desc||'')+'</textarea></div>'+
     '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:5px">Position qualifications</label>'+
-    '<textarea id="jf-req" class="ainp" placeholder="Required skills, certifications, experience level, physical requirements..." style="min-height:80px"></textarea></div>'+
+    '<textarea id="jf-req" class="ainp" placeholder="Required skills, certifications, experience level, physical requirements..." style="min-height:80px">'+(seed.qual||'')+'</textarea></div>'+
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'+
     '<div><label class="fl" style="margin-top:0;margin-bottom:5px">Pay rate per hour</label>'+
-    '<input type="text" id="jf-p" class="ainp" placeholder="e.g. $18/hr or $15/hr + tips"></div>'+
+    '<input type="text" id="jf-p" class="ainp" placeholder="e.g. 18" value="'+(seed.pay||'')+'"></div>'+
     '<div><label class="fl" style="margin-top:0;margin-bottom:5px">Number of positions</label>'+
-    '<input type="number" id="jf-slots" class="ainp" placeholder="e.g. 4" min="1" value="1"></div>'+
+    '<input type="number" id="jf-slots" class="ainp" placeholder="e.g. 4" min="1" value="'+(seed.slots||1)+'"></div>'+
     '</div>'+
+    '<div class="qsh" style="margin-top:16px">&#127919; Role categories <span style="font-weight:400;color:var(--mu);font-size:11px">(used for matching)</span></div>'+
+    '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:7px">Which roles does this position fall under? (pick all that apply)</label>'+
+    chipBlock('roles', ROLE_OPTS, seed.jobRoles)+'</div>'+
     '</div>'+
 
     // RIGHT
     '<div>'+
     '<div class="qsh">&#128197; Season &amp; Timing</div>'+
-    '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:7px">Season</label>'+
-    '<div class="cg">'+SEAS.map(function(s){return '<div class="chip" data-action="chip" data-field="jf_season" data-val="'+s.toLowerCase()+'">'+s+'</div>';}).join('')+'</div></div>'+
+    '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:7px">Season (pick one)</label>'+
+    '<div class="cg">'+SEAS.map(function(s){var on=seed.season===s;return '<div class="chip'+(on?' on':'')+'" data-action="chip" data-field="jf_season" data-val="'+s+'">'+s.charAt(0).toUpperCase()+s.slice(1)+'</div>';}).join('')+'</div></div>'+
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'+
     '<div><label class="fl" style="margin-top:0;margin-bottom:5px">Start month</label>'+
-    '<select id="jf-sm" class="ainp"><option value="">Select...</option>'+MONS.map(function(m){return '<option value="'+m+'">'+m+'</option>';}).join('')+'</select></div>'+
+    '<select id="jf-sm" class="ainp"><option value="">Select...</option>'+MONS.map(function(m){return '<option value="'+m+'"'+(seed.sm===m?' selected':'')+'>'+m+'</option>';}).join('')+'</select></div>'+
     '<div><label class="fl" style="margin-top:0;margin-bottom:5px">End month</label>'+
-    '<select id="jf-em" class="ainp"><option value="">Select...</option>'+MONS.map(function(m){return '<option value="'+m+'">'+m+'</option>';}).join('')+'</select></div>'+
+    '<select id="jf-em" class="ainp"><option value="">Select...</option>'+MONS.map(function(m){return '<option value="'+m+'"'+(seed.em===m?' selected':'')+'>'+m+'</option>';}).join('')+'</select></div>'+
     '</div>'+
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'+
     '<div><label class="fl" style="margin-top:0;margin-bottom:5px">Hours per week</label>'+
-    '<input type="number" id="jf-hrs" class="ainp" placeholder="e.g. 40" value="40"></div>'+
+    '<input type="number" id="jf-hrs" class="ainp" placeholder="e.g. 40" value="'+(seed.hrs||40)+'"></div>'+
     '<div><label class="fl" style="margin-top:0;margin-bottom:5px">Experience required</label>'+
-    '<select id="jf-exp" class="ainp"><option value="none">None &mdash; we will train</option><option value="preferred">Preferred</option><option value="required">Required</option></select></div>'+
+    '<select id="jf-exp" class="ainp">'+
+      ['none','preferred','required'].map(function(v){return '<option value="'+v+'"'+(seed.exp===v?' selected':'')+'>'+(v==='none'?'None — we will train':v.charAt(0).toUpperCase()+v.slice(1))+'</option>';}).join('')+
+    '</select></div>'+
     '</div>'+
-    '<div class="qsh" style="margin-top:16px">&#127968; Housing &amp; CPI</div>'+
+
+    '<div class="qsh" style="margin-top:16px">&#127757; Environment &amp; Lifestyle</div>'+
+    '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:7px">Environment (pick one)</label>'+
+    '<div class="cg">'+ENVS.map(function(o){var on=seed.env===o[0];return '<div class="chip'+(on?' on':'')+'" data-action="chip" data-field="jf_env" data-val="'+o[0]+'">'+o[1]+'</div>';}).join('')+'</div></div>'+
+    '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:7px">Hobbies / interests this role supports</label>'+
+    chipBlock('hobbies', HOBBY_OPTS, seed.hobbies)+'</div>'+
+
+    '<div class="qsh" style="margin-top:16px">&#128176; Earnings &amp; logistics</div>'+
+    '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:7px">Savings potential (pick one)</label>'+
+    '<div class="cg">'+SAVS.map(function(o){var on=seed.savingsLevel===o[0];return '<div class="chip'+(on?' on':'')+'" data-action="chip" data-field="jf_savings" data-val="'+o[0]+'">'+o[1]+'</div>';}).join('')+'</div></div>'+
+    '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">'+
+    '<label style="display:flex;align-items:center;gap:6px;font-size:12px"><input type="checkbox" id="jf-tip"'+(seed.isTipped?' checked':'')+'> Tipped role</label>'+
+    '<label style="display:flex;align-items:center;gap:6px;font-size:12px"><input type="checkbox" id="jf-lic"'+(seed.requiresLicense?' checked':'')+'> Requires driver license</label>'+
+    '<label style="display:flex;align-items:center;gap:6px;font-size:12px"><input type="checkbox" id="jf-pass"'+(seed.requiresPassport?' checked':'')+'> Requires passport</label>'+
+    '</div>'+
+
+    '<div class="qsh" style="margin-top:16px">&#127968; Housing</div>'+
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'+
     '<div><label class="fl" style="margin-top:0;margin-bottom:5px">Housing type</label>'+
-    '<input type="text" id="jf-ht" class="ainp" placeholder="e.g. Shared dorm, Private cabin"></div>'+
-    '<div><label class="fl" style="margin-top:0;margin-bottom:5px">Housing cost</label>'+
-    '<input type="text" id="jf-hc" class="ainp" placeholder="e.g. $200/mo or Included"></div>'+
+    '<input type="text" id="jf-ht" class="ainp" placeholder="e.g. Shared dorm, Private cabin" value="'+(seed.ht||'')+'"></div>'+
+    '<div><label class="fl" style="margin-top:0;margin-bottom:5px">Housing cost / mo ($)</label>'+
+    '<input type="number" id="jf-hc" class="ainp" step="1" min="0" placeholder="0 = included" value="'+(seed.hc||'')+'"></div>'+
     '</div>'+
     '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:5px">Meals provided</label>'+
-    '<input type="text" id="jf-hm" class="ainp" placeholder="e.g. 3 meals/day, Breakfast only, None"></div>'+
-    '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:5px">CPI score <span style="font-weight:400;color:var(--mu)">(cost-positive index, 0–15)</span></label>'+
-    '<input type="number" id="jf-cpi" class="ainp" step="0.1" min="0" max="15" placeholder="e.g. 9.5"></div>'+
+    '<input type="text" id="jf-hm" class="ainp" placeholder="e.g. 3 meals/day, Breakfast only, None" value="'+(seed.hm||'')+'"></div>'+
+    '<div style="font-size:11px;color:var(--mu);margin-bottom:6px">CPI is computed automatically from pay rate &amp; housing cost — no need to enter it.</div>'+
     '</div>'+
 
     '</div>'+// end grid
 
     '<div style="display:flex;gap:10px;margin-top:20px;padding-top:16px;border-top:1px solid var(--brd)">'+
     '<button class="btn btn-xs" data-action="adminnav" data-val="employers">Cancel</button>'+
-    '<button class="btn btn-p" data-action="savejob" data-id="0" data-id2="0">Add position</button>'+
+    '<button class="btn btn-p" data-action="savejob" data-id="'+(empId||0)+'" data-id2="'+(jid||0)+'">'+(isEdit?'Save changes':'Add position')+'</button>'+
     '</div>';
 }
 
 
 async function saveJobFull(eid, jid) {
   function v(id){var el=document.getElementById('jf-'+id);return el?el.value.trim():'';}
+  function chk(id){var el=document.getElementById('jf-'+id);return !!(el&&el.checked);}
   function chipVals(field){return [...document.querySelectorAll('[data-field="jf_'+field+'"].chip.on')].map(function(el){return el.dataset.val;});}
 
-  var empId = ((document.getElementById('jf-emp')||{}).value)||'';
+  var empId = ((document.getElementById('jf-emp')||{}).value) || eid || '';
   var title = v('t');
-  if(!empId){alert('Please select an employer.');return;}
-  if(!title){alert('Please enter a position title.');return;}
+  if(!empId){showAlert({type:'warning',title:'Pick an employer',body:'Select which employer this position belongs to before saving.'});return;}
+  if(!title){showAlert({type:'warning',title:'Missing position title',body:'Enter a title (e.g. “Front Desk Agent”) before saving.'});return;}
 
   var seasonArr = chipVals('season');
-  var emp = E(empId);
+  var envArr = chipVals('env');
+  var savingsArr = chipVals('savings');
 
   function enumOr(val, allowed){return allowed.indexOf(val)>=0?val:null;}
   function strOrNull(s){return s?s:null;}
@@ -3109,7 +3406,7 @@ async function saveJobFull(eid, jid) {
     title: title,
     pay_rate: parseFloat(v('p')) || 0,
     season: enumOr((seasonArr[0]||'summer').toLowerCase(), ['winter','spring','summer','fall','year-round']),
-    start_month: strOrNull(v('sm') || 'May'),
+    start_month: strOrNull(v('sm')),
     end_month: strOrNull(v('em')),
     hours_per_week: parseInt(v('hrs'), 10) || 40,
     positions: parseInt(v('slots'), 10) || 1,
@@ -3119,20 +3416,29 @@ async function saveJobFull(eid, jid) {
     housing_type: strOrNull(v('ht')),
     housing_cost: parseFloat(v('hc')) || 0,
     meals: strOrNull(v('hm')),
-    env: (emp && emp.region && emp.region.toLowerCase().includes('mountain')) ? 'mountain' : 'coastal',
-    job_roles: ['guest-services'],
-    hobbies: [],
-    savings_level: 'mid',
-    status: 'open',
+    env: strOrNull(envArr[0]) || 'mountain',
+    job_roles: chipVals('roles'),
+    hobbies: chipVals('hobbies'),
+    savings_level: enumOr(savingsArr[0] || 'mid', ['low','mid','high']),
+    requires_license: chk('lic'),
+    requires_passport: chk('pass'),
+    is_tipped: chk('tip'),
   };
 
   try {
-    var r = await window.sb.from('jobs').insert(patch);
-    if(r.error) throw r.error;
-  } catch(e) { console.error('save job failed', e); alert('Save failed: '+e.message); return; }
+    if (jid && jid !== '0' && jid !== 0) {
+      var u = await window.sb.from('jobs').update(patch).eq('id', jid);
+      if(u.error) throw u.error;
+    } else {
+      patch.status = 'open';
+      var ins = await window.sb.from('jobs').insert(patch);
+      if(ins.error) throw ins.error;
+    }
+  } catch(e) { console.error('save job failed', e); showAlert({type:'error',title:'Save failed',body:e.message}); return; }
 
   window._jobEmpId = 0;
   adminJobFormMode = false;
+  adminJobFormId = null;
   adminView = 'employers';
   await hydrateAndRender();
 }
