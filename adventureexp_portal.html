@@ -3606,8 +3606,24 @@ function boot() {
     if (!currentUser) {
       role = profile.role === 'admin' ? 'admin' : 'student';
     }
+    var wasFirstLoad = !currentUser;
     currentUser = legacyUser(profile);
     resolved = true;
+
+    // TOKEN_REFRESHED and USER_UPDATED fire silently every ~50-60 minutes as
+    // Supabase rotates the JWT. The underlying profile/program_profile data
+    // hasn't changed — re-hydrating would replace the in-memory students[]
+    // array with stale DB rows and wipe any unsaved Match-profile edits the
+    // user is currently typing. Refresh currentUser (so the new JWT-derived
+    // photo_url / email take effect) but skip the data re-pull.
+    if (!wasFirstLoad && (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED')) {
+      return;
+    }
+
+    // Any hydrate path that can replace students[] must first persist
+    // pending Match-profile edits, otherwise the user's in-flight selections
+    // get clobbered by stale DB rows.
+    try { await flushProgramSave(); } catch(_) {}
     try {
       await window.DB.hydrateAll({ currentUser, employers, jobs, students, apps, allApps, notifications, reviews });
     } catch (e) { console.error('[boot] hydrate failed', e); }
