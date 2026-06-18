@@ -227,12 +227,19 @@ body.auth-mode .topbar{display:none !important}
 .pgb{height:5px;background:var(--brd);border-radius:3px;overflow:hidden;margin-top:6px}
 .pgf{height:100%;background:var(--or);border-radius:3px;transition:width .3s}
 .radio-group{display:flex;flex-direction:column;gap:6px}
-.radio-opt{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border:1.5px solid var(--brd);border-radius:9px;cursor:pointer;transition:all .12s;font-size:12px;font-weight:600;color:var(--mu);background:var(--sur)}
-.radio-opt:hover{border-color:var(--or-dk);color:var(--tx)}
+.radio-opt{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1.5px solid var(--brd);border-radius:9px;cursor:pointer;transition:all .12s;font-size:12px;font-weight:600;color:var(--mu);background:var(--sur)}
+.radio-opt:hover{border-color:var(--or-dk);color:var(--tx);background:var(--kh-lt)}
 .radio-opt.on{border-color:var(--or);background:var(--or-lt);color:var(--or-dk)}
 
-.radio-opt.on .rdot{border-color:var(--or);background:var(--or)}
+/* The dot: outer ring + inner fill. Visible in BOTH states — empty ring when
+   not selected, orange ring with white center when selected. Without these
+   base rules the options render as identical blank boxes with no way to tell
+   what's clickable or selected. */
+.rdot{width:16px;height:16px;border-radius:50%;border:2px solid var(--brd);background:var(--sur);display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .12s}
+.rdot-inner{width:6px;height:6px;border-radius:50%;background:#fff;display:none}
 
+.radio-opt:hover .rdot{border-color:var(--or-dk)}
+.radio-opt.on .rdot{border-color:var(--or);background:var(--or)}
 .radio-opt.on .rdot-inner{display:block}
 input[type=date],select,textarea,input[type=text],input[type=email],input[type=number],input[type=password]{width:100%;font-family:"Nunito Sans",sans-serif;font-size:12px;padding:8px 10px;border:1.5px solid var(--brd);border-radius:9px;background:var(--sur);color:var(--tx);transition:border-color .15s,box-shadow .15s;box-sizing:border-box}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--or);box-shadow:0 0 0 3px rgba(255,173,73,.12)}
@@ -486,7 +493,7 @@ document.addEventListener('click',function(e){
   if(t){
     // IDs from data-id can be UUIDs (Supabase) or numeric — keep as string.
     var a=t.dataset.action, id=t.dataset.id||null, id2=t.dataset.id2||null, val=t.dataset.val;
-    if(a==='nav'){studentView=val;detailJobId=null;render();}
+    if(a==='nav'){if(_pdDirty)flushProgramSave();studentView=val;detailJobId=null;render();}
     else if(a==='empnav'){empView=val;render();}
     else if(a==='adminnav'){adminView=val;if(val!=='settings')window._adminNotifSettings=null;render();}
     else if(a==='detail'){detailJobId=id;render();}
@@ -571,7 +578,14 @@ document.addEventListener('click',function(e){
 
 document.addEventListener('input',function(e){
   var u=e.target.closest('[data-upd]');
-  if(u){upPD(u.dataset.upd,u.value);return;}
+  if(u){
+    // For textareas, suppress the full re-render so each keystroke doesn't
+    // blow away focus and scroll position. The matching `change` listener
+    // (fires on blur) will do a render so the live preview catches up.
+    var skip = u.tagName === 'TEXTAREA';
+    upPD(u.dataset.upd, u.value, skip ? {skipRender:true} : undefined);
+    return;
+  }
   var s=e.target.closest('[data-search]');
   if(s){searchQ=s.value;render();return;}
   var sw=e.target.closest('[data-strength]');
@@ -609,6 +623,18 @@ document.addEventListener('keydown',function(e){
     var li=document.getElementById('li-email');
     if(li)doLogin();
   }
+});
+
+// If the participant switches tabs in the browser or hides the page while
+// editing the Match profile, flush any pending edits so they don't get blown
+// away by a realtime hydrate while the tab is backgrounded.
+document.addEventListener('visibilitychange', function(){
+  if (document.visibilityState === 'hidden' && typeof _pdDirty !== 'undefined' && _pdDirty) {
+    flushProgramSave();
+  }
+});
+window.addEventListener('pagehide', function(){
+  if (typeof _pdDirty !== 'undefined' && _pdDirty) flushProgramSave();
 });
 
 async function handlePhotoUpload(inp) {
@@ -795,7 +821,11 @@ function subscribeRealtime() {
       { event: 'INSERT', schema: 'public', table: 'applications' },
       async function() {
         // A new application landed (admin or participant) — refresh the cache.
+        // Flush any pending program-profile edits first; otherwise hydrateAll
+        // will replace students[] with stale DB rows and wipe the participant's
+        // unsaved selections.
         try {
+          await flushProgramSave();
           await window.DB.hydrateAll({ currentUser, employers, jobs, students, apps, allApps, notifications, reviews });
           render();
         } catch(_) {}
@@ -805,6 +835,7 @@ function subscribeRealtime() {
       { event: 'UPDATE', schema: 'public', table: 'applications' },
       async function() {
         try {
+          await flushProgramSave();
           await window.DB.hydrateAll({ currentUser, employers, jobs, students, apps, allApps, notifications, reviews });
           render();
         } catch(_) {}
@@ -2815,25 +2846,38 @@ function rAdmSettings(){
 // for the optimistic render.
 var _pdPending = null;
 var _pdTimer = null;
+var _pdDirty = false; // true when there are local edits not yet persisted
 function queueProgramSave() {
   if (!currentUser) return;
+  _pdDirty = true;
   if (_pdTimer) clearTimeout(_pdTimer);
-  _pdTimer = setTimeout(async function(){
-    var s = currentStudent();
-    if (!s || !s.pd) return;
-    var snapshot = Object.assign({}, s.pd);
-    try {
-      await window.DB.saveProgramProfile(currentUser.id, snapshot);
-      // Re-fetch profile so profile_score + pathway from the trigger land in UI.
-      var fresh = await window.Auth.fetchProfile(currentUser.id);
-      s.profileScore = fresh.profile_score || 0;
-      s.pathway = fresh.pathway || '';
-      render();
-    } catch(e) { console.error('save program profile failed', e); }
-  }, 400);
+  _pdTimer = setTimeout(function(){ flushProgramSave(); }, 400);
 }
 
-function upPD(field,val){
+// Immediately persist whatever's in the current student's pd. Called by the
+// debounce timer AND explicitly before anything that could overwrite local
+// state (realtime hydrates, tab navigation, etc.) so unsaved selections
+// aren't lost when DB.hydrateAll() replaces the students[] array.
+async function flushProgramSave() {
+  if (_pdTimer) { clearTimeout(_pdTimer); _pdTimer = null; }
+  if (!_pdDirty || !currentUser) return;
+  var s = currentStudent();
+  if (!s || !s.pd) { _pdDirty = false; return; }
+  var snapshot = Object.assign({}, s.pd);
+  _pdDirty = false;
+  try {
+    await window.DB.saveProgramProfile(currentUser.id, snapshot);
+    var fresh = await window.Auth.fetchProfile(currentUser.id);
+    s.profileScore = fresh.profile_score || 0;
+    s.pathway = fresh.pathway || '';
+    render();
+  } catch(e) {
+    console.error('save program profile failed', e);
+    _pdDirty = true; // keep dirty so a later flush retries
+  }
+}
+
+function upPD(field,val,opts){
   if(field==="filterCPI"){filterCPI=val;render();return;}
   var s=currentStudent();
   if(s&&s.pd){
@@ -2842,7 +2886,12 @@ function upPD(field,val){
     s.profileScore=calcProfileScore(s.pd);
   }
   queueProgramSave();
-  render();
+  // Textareas pass {skipRender:true} so each keystroke doesn't rebuild the
+  // DOM (which loses focus, caret position, and scroll — the bug where typing
+  // a single letter scrolls the page back to the top). The blur/change event
+  // on the same textarea triggers a normal render() so the live match preview
+  // catches up.
+  if (!opts || !opts.skipRender) render();
 }
 function setRadio(el) {
   var field = el.dataset.field;
