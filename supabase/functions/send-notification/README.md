@@ -1,35 +1,49 @@
 # send-notification — deployment runbook
 
-This Edge Function turns every row inserted into `notifications` into a Resend email. Setup is a one-time, ~10-minute job.
+This Edge Function turns every row inserted into `notifications` into an email, sent over **SMTP** (the client's SiteGround mailbox). Setup is a one-time, ~10-minute job.
 
-## Step 1 — Sign up at Resend
+## Step 1 — Confirm the sender mailbox
 
-1. Open https://resend.com and sign up.
-2. Project Settings → **API Keys** → Create a key. Copy the `re_...` string.
-3. (Skip domain verification for now — Resend lets you send via `onboarding@resend.dev` while testing.)
+The client created a dedicated mailbox on their domain (SiteGround rejects sends from addresses outside the authenticated domain). You should have:
+
+- **SMTP host** — e.g. `giowm1315.siteground.biz`
+- **Port** — `465` (implicit SSL/TLS). `587`/`2525` also work but use STARTTLS.
+- **Username** — the full address, e.g. `noreply@adventureexp.com`
+- **Password** — for that mailbox
+- **Display name** — e.g. `AdventureEXP`
+
+Sanity-check the password by logging into webmail (Site Tools → Email → Accounts → ⋮ → Log in to Webmail) before debugging anything else.
 
 ## Step 2 — Set the secrets in Supabase
 
 **Dashboard route (no CLI):**
 
 1. Supabase Dashboard → **Project Settings → Edge Functions → Secrets**.
-2. Add these three keys (the bottom two `SUPABASE_*` are auto-provided):
+2. Add these (the `SUPABASE_*` pair is auto-provided, don't add them):
 
 | Key | Value |
 |---|---|
-| `RESEND_API_KEY` | `re_...` from step 1 |
-| `FROM_EMAIL` | `AdventureEXP <onboarding@resend.dev>` (dev) — or your verified domain |
-| `SITE_URL` | `https://your-vercel-app.vercel.app/adventureexp_portal.html` (for now, your localhost link works too) |
+| `SMTP_HOST` | `giowm1315.siteground.biz` |
+| `SMTP_PORT` | `465` |
+| `SMTP_USER` | `noreply@adventureexp.com` |
+| `SMTP_PASS` | the mailbox password |
+| `FROM_EMAIL` | `AdventureEXP <noreply@adventureexp.com>` — **must** be on the authenticated domain |
+| `SITE_URL` | `https://your-vercel-app.vercel.app/adventureexp_portal.html` |
 
-3. Save.
+3. Save. (Any old `RESEND_API_KEY` can be deleted — it's no longer read.)
 
 **CLI route (alternative):**
 
 ```bash
-supabase secrets set RESEND_API_KEY=re_xxx
-supabase secrets set FROM_EMAIL='AdventureEXP <onboarding@resend.dev>'
-supabase secrets set SITE_URL='http://localhost:8000/adventureexp_portal.html'
+supabase secrets set SMTP_HOST=giowm1315.siteground.biz
+supabase secrets set SMTP_PORT=465
+supabase secrets set SMTP_USER=noreply@adventureexp.com
+supabase secrets set SMTP_PASS='the-mailbox-password'
+supabase secrets set FROM_EMAIL='AdventureEXP <noreply@adventureexp.com>'
+supabase secrets set SITE_URL='https://your-vercel-app.vercel.app/adventureexp_portal.html'
 ```
+
+> Never commit `SMTP_PASS` to git — it lives only in Supabase secrets.
 
 ## Step 3 — Deploy the function
 
@@ -80,14 +94,28 @@ values (
 ```
 
 Within ~5 seconds you should:
-- See a new in-app notification (the bell badge increments) — already worked before this function.
-- Receive the email at the admin's address (check spam if it's a Gmail).
+- See a new in-app notification (the bell badge increments).
+- Receive the email at the admin's address (check spam if it's Gmail).
 - See an entry in **Edge Functions → send-notification → Logs** with `mode: "webhook"`.
 
-If you don't get the email:
-- **Logs** in Supabase Functions → Logs tab — look for the Resend error response.
-- **Resend dashboard** → Logs — shows what was actually sent (or rejected).
-- Most common cause: `FROM_EMAIL` uses a domain you haven't verified at Resend. Switch to `onboarding@resend.dev` for testing.
+If you don't get the email, check the function **Logs** for `smtp send failed`. Common causes:
+- Wrong `SMTP_PASS` or `SMTP_HOST` → auth/connection error in the log.
+- `FROM_EMAIL` not on the authenticated domain → SiteGround rejects the send.
+- Port mismatch — use `465` for implicit TLS.
+
+## Deliverability (avoid the spam folder)
+
+SiteGround auto-configures SPF/DKIM for domains hosted with them. Confirm **DMARC** exists for `adventureexp.com`:
+
+```bash
+dig +short TXT _dmarc.adventureexp.com
+```
+
+If nothing returns, ask the client to add a DMARC record (a simple `v=DMARC1; p=none; rua=mailto:...` is enough to start). If DNS is managed off SiteGround, the SPF/DKIM records need to be copied there too.
+
+## Sending limits
+
+SiteGround shared hosting caps outgoing mail (~a few hundred/hour depending on plan). Fine for transactional volume. If volume grows or delivery analytics are needed, the send call in `index.ts` can be swapped to an API provider (SES/Postmark) without touching the templates or the webhook wiring.
 
 ## Local development
 
@@ -95,20 +123,4 @@ If you don't get the email:
 supabase functions serve send-notification --env-file .env.local
 ```
 
-Then POST to `http://localhost:54321/functions/v1/send-notification` with a webhook-shaped body.
-
-## Production switch
-
-When ready to use a custom domain:
-
-1. Resend → **Domains** → Add your domain → add the DNS records they show you.
-2. Wait for verification (~5 minutes after DNS propagation).
-3. Update `FROM_EMAIL` secret to `AdventureEXP <noreply@yourdomain.com>`.
-4. Redeploy is not needed — env vars are read on each invocation.
-
-## Cost
-
-Resend free tier: 100 emails/day, 3000/month. Plenty for v1.
-Supabase Edge Functions free tier: 500K invocations/month. We'll use ~hundreds.
-
-Total monthly cost at MVP scale: **$0**.
+Put the `SMTP_*` / `FROM_EMAIL` / `SITE_URL` vars in `.env.local` (gitignored). Then POST to `http://localhost:54321/functions/v1/send-notification` with a webhook-shaped body.

@@ -7,10 +7,10 @@
 .vercel/
 
 # Local secrets (anon key in lib/env.js IS safe to commit — it pairs with RLS)
-.env
-.env.local
 .env.*.local
 
 # Supabase CLI artifacts (not used here but keep just in case)
 .supabase/
 supabase/.temp/
+config.bat
+node_modules

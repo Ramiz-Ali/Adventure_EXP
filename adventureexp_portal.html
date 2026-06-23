@@ -1358,6 +1358,24 @@ function closeModal(){
   _openThreadAppId = null;
   window._adminPhotoEmpId = null;
 }
+// Apply a pending email deep-link (?goto=) once the user is authenticated.
+// Maps the generic target to the right tab for the current role, then clears
+// it so it only fires once. Called from render() below.
+function consumePendingGoto(){
+  var g = window._pendingGoto;
+  if (!g || !currentUser) return;
+  window._pendingGoto = null;
+  if (role === 'admin') {
+    adminView = ({ applications:'applications', messages:'applications',
+      employers:'employers', students:'students', reviews:'reviews',
+      overview:'overview', settings:'settings' })[g] || 'overview';
+  } else {
+    studentView = ({ applications:'applications', messages:'messages',
+      discover:'discover', listings:'listings', profile:'profile',
+      dashboard:'dashboard' })[g] || 'dashboard';
+    detailJobId = null;
+  }
+}
 function render(){
   if (!isLoggedIn()) {
     document.getElementById("main").innerHTML = renderAuth();
@@ -1367,6 +1385,7 @@ function render(){
     updateTopbarUser();
     return;
   }
+  consumePendingGoto();
   document.body.classList.remove('auth-mode');
   // Role switcher is only useful for admins (who can preview all three views).
   // For participants/employers, hide it entirely — they only have one view.
@@ -2832,7 +2851,7 @@ function rAdmSettings(){
     '<label style="display:flex;align-items:center;gap:10px;padding:10px 0">'+
       '<input type="checkbox" id="ns-email"'+(s.email_enabled?' checked':'')+'>'+
       '<div><div style="font-weight:600;font-size:13px">Email notifications</div>'+
-      '<div style="font-size:11px;color:var(--mu)">Sent via Resend whenever an in-system event fires</div></div>'+
+      '<div style="font-size:11px;color:var(--mu)">Sent by email whenever an in-system event fires</div></div>'+
     '</label>'+
     '<div style="display:flex;align-items:center;gap:10px;margin-top:14px">'+
       '<button class="btn btn-p btn-xs" data-action="savenotifsettings">Save preferences</button>'+
@@ -3513,6 +3532,21 @@ function whenSbReady(fn) {
 // supabase-js client is mid-refresh on a navigator.locks lease — leaving the
 // page blank with role-sw showing from its CSS default until the next refresh.
 function boot() {
+  // ── Deep-link target from email CTA (?goto=applications|messages|…) ───────
+  // Email buttons append ?goto=<tab>. Stash it, strip it from the URL, and
+  // apply it on the first authenticated render (see consumePendingGoto()).
+  try {
+    var _sp = new URLSearchParams(window.location.search || '');
+    var _g = _sp.get('goto');
+    if (_g) {
+      window._pendingGoto = _g;
+      _sp.delete('goto');
+      var _qs = _sp.toString();
+      history.replaceState(null, '',
+        window.location.pathname + (_qs ? '?' + _qs : '') + (window.location.hash || ''));
+    }
+  } catch (_) {}
+
   // ── Password-recovery flow detection ────────────────────────────────────
   // When the user clicks the reset link in the email, the URL is shaped like
   //   http://localhost:8000/adventureexp_portal.html#access_token=...&type=recovery
