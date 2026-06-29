@@ -309,6 +309,10 @@ textarea{resize:vertical;min-height:70px}
 .albl{display:block;font-size:11px;font-family:"Nunito",sans-serif;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;margin-top:14px}
 .ainp{width:100%;font-family:"Nunito Sans",sans-serif;font-size:14px;padding:12px 14px;border:1.5px solid var(--brd);border-radius:10px;background:var(--sur);color:var(--tx);transition:border-color .15s, box-shadow .15s;box-sizing:border-box}
 .ainp:focus{outline:none;border-color:var(--or);box-shadow:0 0 0 3px rgba(255,173,73,.15)}
+/* Inputs and selects share .ainp but render at different native heights — pin
+   them to the same height so side-by-side fields line up (textareas use
+   min-height, so they're unaffected). */
+input.ainp,select.ainp{height:46px}
 .apw{position:relative}
 .apw .ainp{padding-right:64px}
 .ashowhide{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:12px;font-family:"Nunito",sans-serif;font-weight:700;color:var(--mu);padding:4px 8px;border-radius:5px}
@@ -419,6 +423,25 @@ var STATS=["applied","interviewing","offered","placed","withdrawn"];
 var STC={applied:"bb",interviewing:"ba",offered:"bt",placed:"bt",withdrawn:"bg"};
 var IC={hospitality:"bb","outdoor rec":"bt",trades:"ba",agriculture:"bt",marine:"bb",ranch:"ba",resort:"bt",retail:"bp",other:"bg"};
 var ACTS=["Skiing","Hiking","Surfing","Water sports","Rock climbing","Horseback riding","Fishing","Mountain biking","Social scene"];
+// Shared taxonomies — used by BOTH the admin job form and the participant Match
+// Profile so the two always mirror each other (client requirement). Values must
+// match across both sides for the matching algorithm's overlap to work.
+var ROLE_OPTS_ALL=[
+  ['guest-services','Guest Services / Front Desk'],['food-bev','Food &amp; Beverage'],
+  ['kitchen','Kitchen / Cook / Prep'],['housekeeping','Housekeeping'],
+  ['rooms-division','Rooms Division'],['maintenance','Maintenance'],['retail','Retail'],
+  ['outdoor','Ski / Activity Support'],['outdoor-rec','Outdoor Recreation'],
+  ['camp-counselor','Camp Counselor'],['kids','Working with kids'],['labor','General Labor'],
+];
+var ACTIVITY_OPTS=[
+  ['Skiing','Skiing'],['Snowboarding','Snowboarding'],['Hiking','Hiking'],['Outdoors','Outdoors'],
+  ['Climbing','Climbing'],['Water sports','Water sports'],['Fitness','Fitness / gyms'],['Yoga','Yoga'],
+  ['Recreational sports','Recreational sports'],['Photography','Photography'],['Arts','Arts / music / culture'],
+  ['Weekend trips','Weekend trips nearby'],['National parks','National parks access'],
+  ['Community events','Community events'],['Coffee/breweries','Coffee shops / breweries'],
+  ['Social scene','Social scene'],['Public transit','Public transit'],['Walkability','Walkability'],
+  ['Bikeability','Bikeability'],['Near airport','Within 1 hour of an airport'],
+];
 var CATL=["Timing","Finances","Role","Lifestyle","Flexibility"];
 var CATC=["#2A94BC","#2A9D6E","#87D3ED","#EA5A4F","#C0E2EE"];
 
@@ -528,6 +551,13 @@ document.addEventListener('click',function(e){
     else if(a==='addjob'){adminJobFormMode=true;adminJobFormId=0;adminView='jobform';window._jobEmpId=id||0;window._jobFormData=null;render();}
     else if(a==='editjob'){adminJobFormMode=true;adminJobFormId=id;adminView='jobform';var _ej=J(id);window._jobEmpId=_ej?_ej.empId:0;window._jobFormData=null;render();}
     else if(a==='savejob'){withButtonLoading(t,function(){return saveJobFull(id,id2);});}
+    else if(a==='dupjob'){withButtonLoading(t,function(){return duplicateJob(id);});}
+    else if(a==='archjob'){confirmArchiveJob(id,true);}
+    else if(a==='unarchjob'){archiveJob(id,false);}
+    else if(a==='deljob'){confirmDeleteJob(id);}
+    else if(a==='archemp'){confirmArchiveEmp(id,true);}
+    else if(a==='unarchemp'){archiveEmp(id,false);}
+    else if(a==='delemp'){confirmDeleteEmp(id);}
     else if(a==='editstudent'){openAdminStudentEdit(id);}
     else if(a==='savestudent'){saveAdminStudent(id);}
     else if(a==='chip'){toggleChip(t);}
@@ -667,6 +697,12 @@ async function handlePhotoUpload(inp) {
       await window.sb.from('profiles').update({ photo_url: url }).eq('id', currentUser.id);
       currentUser.photo_url = url;
       photoStore['profile'] = url; // refresh the cached preview to the final URL
+    } else if (key.indexOf('stu-') === 0) {
+      // Admin uploading a photo on a participant's behalf: key shape "stu-<participantId>".
+      var stuId = key.substring('stu-'.length);
+      var stuUrl = await window.Upload.uploadProfilePhoto(file, stuId);
+      await window.sb.from('profiles').update({ photo_url: stuUrl }).eq('id', stuId);
+      photoStore[key] = stuUrl;
     } else if (key.indexOf('emp-logo-') === 0) {
       // Employer logo: key shape "emp-logo-<employerId>".
       photoEmpId = key.substring('emp-logo-'.length);
@@ -702,6 +738,14 @@ async function handlePhotoUpload(inp) {
     var stillOpen = document.querySelector('.mod h3');
     if (stillOpen && stillOpen.textContent.indexOf('Edit profile') >= 0) {
       openEditProfile();
+    }
+  }
+  // Re-open the admin "Edit participant" modal so the spinner clears and the
+  // new photo shows (render() rebuilds #main, not the modal overlay).
+  if (key.indexOf('stu-') === 0) {
+    var stillOpenStu = document.querySelector('.mod h3');
+    if (stillOpenStu && stillOpenStu.textContent.indexOf('Edit participant') >= 0) {
+      openAdminStudentEdit(key.substring('stu-'.length));
     }
   }
   // Re-open the admin photo modal if it was the one we touched — without this
@@ -1352,6 +1396,17 @@ function setRole(r){
   });
   render();
 }
+// Human-friendly "last login" for the admin participant list.
+function fmtLastLogin(iso){
+  if(!iso) return 'never';
+  var d=new Date(iso); if(isNaN(d)) return 'never';
+  var diff=(Date.now()-d.getTime())/1000;
+  if(diff<60) return 'just now';
+  if(diff<3600) return Math.floor(diff/60)+'m ago';
+  if(diff<86400) return Math.floor(diff/3600)+'h ago';
+  if(diff<604800) return Math.floor(diff/86400)+'d ago';
+  return d.toLocaleDateString();
+}
 function showModal(h){document.getElementById("modal-root").innerHTML='<div class="mow" data-action="closemod"><div class="mod">'+h+'</div></div>';}
 function closeModal(){
   document.getElementById("modal-root").innerHTML="";
@@ -1591,7 +1646,7 @@ function rDashboard(){
   var s=currentStudent();
   var p=s.pd;
   var oc=myApps().filter(function(a){return a.status==="offered";}).length;
-  var openJobs=jobs.filter(function(j){return j.status==="open";}).length;
+  var openJobs=jobs.filter(function(j){return j.status==="open"&&!j.archived;}).length;
   var hp=(p.roles&&p.roles.length>0)||(p.envs&&p.envs.length>0)||(p.hobbies&&p.hobbies.length>0)||!!p.startDate;
   var pathway=s.pathway||calcPathway(p);
 
@@ -1658,7 +1713,7 @@ function rDiscover(){
   if(!hp){
     return '<div class="card" style="text-align:center;padding:2.5rem"><div style="font-size:36px;margin-bottom:12px">🧭</div><div style="font-family:Nunito,sans-serif;font-weight:700;font-size:15px;margin-bottom:6px">Build your match profile first</div><p style="font-size:12px;color:var(--mu);margin-bottom:16px;line-height:1.65">Answer questions about your availability, interests, and goals and we will rank every opportunity by how well it fits you.</p><button class="btn btn-p" data-action="nav" data-val="profile">Build my profile →</button></div>';
   }
-  var scored=jobs.map(function(j){return Object.assign({score:scoreJob(j,p)},j);}).sort(function(a,b){return b.score.overall-a.score.overall;});
+  var scored=jobs.filter(function(j){return !j.archived;}).map(function(j){return Object.assign({score:scoreJob(j,p)},j);}).sort(function(a,b){return b.score.overall-a.score.overall;});
   var backNav='<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">'+'<button class="bkb" data-action="nav" data-val="dashboard">&#8592; Dashboard</button>'+'<span style="font-size:13px;font-weight:700;font-family:Nunito,sans-serif;color:var(--tx)">&#127919; Discover</span>'+'</div>';
   var html = backNav + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px"><div><div style="font-family:Nunito,sans-serif;font-weight:700;font-size:14px">Your matched opportunities</div><div style="font-size:11px;color:var(--mu)">'+scored.filter(function(j){return j.score.overall>=55;}).length+' strong matches - ranked by fit</div></div><button class="btn btn-xs" data-action="nav" data-val="profile">Edit match profile</button></div>';
   scored.forEach(function(j){
@@ -1688,9 +1743,15 @@ function rListings(){
   var s=currentStudent();var fj=filteredJobs();
   var sCt={}; SEAS.forEach(function(x){sCt[x]=jobs.filter(function(j){return j.season===x;}).length;});
   var mCt={}; MONS.forEach(function(x){mCt[x]=jobs.filter(function(j){return j.startMonth===x;}).length;});
-  var rCt={}; REGS.forEach(function(x){rCt[x]=jobs.filter(function(j){return E(j.empId)&&E(j.empId).state===x;}).length;});
-  var aCt={};ACTS.forEach(function(x){aCt[x]=jobs.filter(function(j){return (j.activities||[]).includes(x);}).length;});
-  var aM=MONS.filter(function(m){return mCt[m]>0;}),aR=REGS.filter(function(r){return rCt[r]>0;}),aA=ACTS.filter(function(a){return aCt[a]>0;});
+  // States: derive from employers actually in the system (not a fixed list).
+  var STATES=[]; employers.forEach(function(e){ if(e&&e.state&&STATES.indexOf(e.state)<0) STATES.push(e.state); }); STATES.sort();
+  var rCt={}; STATES.forEach(function(x){rCt[x]=jobs.filter(function(j){return E(j.empId)&&E(j.empId).state===x;}).length;});
+  // Activities: use the shared taxonomy, matched against each job's hobbies.
+  var ACT_VALS=ACTIVITY_OPTS.map(function(o){return o[0];});
+  var ACT_LBL={}; ACTIVITY_OPTS.forEach(function(o){ ACT_LBL[o[0]]=o[1]; });
+  var aCt={};ACT_VALS.forEach(function(x){aCt[x]=jobs.filter(function(j){return (j.hobbies||[]).includes(x);}).length;});
+  // Months: always show all 12 in calendar order. States: all with employers. Activities: those present on jobs.
+  var aM=MONS,aR=STATES,aA=ACT_VALS.filter(function(a){return aCt[a]>0;});
   var sb='<div class="sidebar"><div class="sbs"><div class="sbt">Season<button class="clr" data-action="clrseason">clear</button></div>'+
     SEAS.map(function(s){return '<div class="fo'+(filterSeason.has(s)?" on":"")+'" data-action="filter" data-val="'+s+'" data-set="season"><span>'+s.charAt(0).toUpperCase()+s.slice(1)+'</span><span class="fc">'+(sCt[s]||0)+'</span></div>';}).join("")+'</div>'+
     '<div class="sbs"><div class="sbt">Start month<button class="clr" data-action="clrmonth">clear</button></div>'+
@@ -1698,7 +1759,7 @@ function rListings(){
     '<div class="sbs"><div class="sbt">State<button class="clr" data-action="clrregion">clear</button></div>'+
     aR.map(function(r){return '<div class="fo'+(filterRegion.has(r)?" on":"")+'" data-action="filter" data-val="'+r+'" data-set="region"><span>'+r+'</span><span class="fc">'+rCt[r]+'</span></div>';}).join("")+'</div>'+
     '<div class="sbs"><div class="sbt">Activity<button class="clr" data-action="clractivity">clear</button></div>'+
-    aA.map(function(a){return '<div class="fo'+(filterActivity.has(a)?' on':'')+' data-action="filter" data-val="'+a+'" data-set="activity"><span>'+a+'</span><span class="fc">'+(aCt[a]||0)+'</span></div>';}).join('')+
+    aA.map(function(a){return '<div class="fo'+(filterActivity.has(a)?' on':'')+'" data-action="filter" data-val="'+a+'" data-set="activity"><span>'+(ACT_LBL[a]||a)+'</span><span class="fc">'+(aCt[a]||0)+'</span></div>';}).join('')+
     '</div>'+
     '<div class="sbs"><div class="sbt">Earnings tier<button class="clr" data-action="clrcpi">clear</button></div>'+
     '<select style="font-size:11px;margin-top:3px;width:100%" data-upd="filterCPI">'+
@@ -1710,12 +1771,12 @@ function rListings(){
     '<div class="fo'+(filterNow?' on':'')+' data-action="togglenow"><span>Interviewing now</span><span class="fc">'+jobs.filter(function(j){return j.status==='open';}).length+'</span></div>'+
     '</div>'+
     '</div>';
-  var lst='<div><div class="sb"><input type="text" placeholder="Search jobs..." id="sq" value="'+searchQ+'" data-search="1"></div>'+
+  var backNav='<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px"><button class="bkb" data-action="nav" data-val="dashboard" style="margin-bottom:0">&#8592; Dashboard</button><span style="font-size:13px;font-weight:700;font-family:Nunito,sans-serif;color:var(--tx)">&#128196; Job Listings</span></div>';
+  var lst='<div>'+backNav+'<div class="sb"><input type="text" placeholder="Search jobs..." id="sq" value="'+searchQ+'" data-search="1"></div>'+
     '<div style="font-size:12px;color:var(--mu);margin-bottom:10px;font-weight:600">'+fj.length+' jobs · <span style="color:var(--op)">'+fj.filter(function(j){return j.status==="open";}).length+' OPEN</span></div>'+
     fj.map(function(j){
       var e=E(j.empId);var ap=MA(j.id);
-      var backNav='<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">'+'<button class="bkb" data-action="nav" data-val="dashboard">&#8592; Dashboard</button>'+'<span style="font-size:13px;font-weight:700;font-family:Nunito,sans-serif;color:var(--tx)">&#128196; Job Listings</span>'+'</div>';
-  return backNav + '<div class="lr" data-action="detail" data-id="'+j.id+'">'+
+  return '<div class="lr" data-action="detail" data-id="'+j.id+'">'+
         '<div class="el">'+empLogo(e)+'</div>'+
         '<div class="lb2">'+
           '<div class="lt">'+j.title+'</div>'+
@@ -1733,10 +1794,11 @@ function rListings(){
 function filteredJobs(){
   return jobs.filter(function(j){
     var e=E(j.empId);
+    if(j.archived)return false;
     if(filterSeason.size&&!filterSeason.has(j.season))return false;
     if(filterMonth.size&&!filterMonth.has(j.startMonth))return false;
     if(filterRegion.size&&!(e&&filterRegion.has(e.state)))return false;
-    if(filterActivity.size){var hasAct=(j.activities||[]).some(function(a){return filterActivity.has(a);});if(!hasAct)return false;}
+    if(filterActivity.size){var hasAct=(j.hobbies||[]).some(function(a){return filterActivity.has(a);});if(!hasAct)return false;}
     if(filterCPI){var minCpi=parseFloat(filterCPI)||0;if(j.cpi<minCpi)return false;}
     if(filterNow&&j.status!=="open")return false;
     if(searchQ&&!j.title.toLowerCase().includes(searchQ.toLowerCase())&&!(e&&e.name.toLowerCase().includes(searchQ.toLowerCase())))return false;
@@ -1907,12 +1969,11 @@ function rProfile(){
     '<div class="c2"><div><span class="fl">Availability</span><div style="font-size:12px">'+s.availability.start+' to '+s.availability.end+'</div></div>'+
     '<div><span class="fl">Eligibility</span><div style="font-size:12px">'+s.eligibility+'</div></div></div>'+
     '<span class="fl">Bio</span><p style="font-size:12px;color:var(--mu);margin-top:3px;line-height:1.65">'+s.bio+'</p>'+
-    '<div class="ai">✦ AI bio rewriter — coming soon</div>'+
     '<span class="fl">Industry interests</span><div class="tr">'+s.industries.map(function(i){return bdg(i,IC[i]||"bg");}).join("")+'</div>'+
-    '<span class="fl">Preferred destinations</span><div class="tr">'+s.destinations.map(function(d){return bdg(d,"bp");}).join("")+'</div>'+
-    '<span class="fl">Skills</span><p style="font-size:12px;margin-top:3px">'+s.skills+'</p>'+
+    '<span class="fl">Skills</span><p style="font-size:12px;margin-top:3px">'+(s.skills||'')+'</p>'+
+    '<div style="font-size:10px;color:var(--mu);margin-top:2px">Feature: badges earned from the Life Skills course (coming soon)</div>'+
     '<div class="dv"></div>'+
-    '<div class="shd">Course progress (via Moodle)</div>'+
+    '<div class="shd">Life Skills Foundation Course Progress</div>'+
     s.courses.map(function(c){return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px solid var(--brd)"><span>'+c+'</span>'+bdg("complete","bt")+'</div>';}).join("")+
     '<div class="ai">✦ Resume writing assistant — coming soon</div>'+
     '<div style="margin-top:12px;display:flex;gap:7px">'+
@@ -1939,9 +2000,9 @@ function rMatchIntake(p) {
   }
 
   // Count answered
-  var answered = 0, total = 20;
+  var answered = 0, total = 19;
   ["startDate","endDate","minDuration","flex","license","passport","car",
-   "priority","housingPref","recImportance","finGoal","savings","income","altOpen","mindset"].forEach(function(k){ if(p[k]) answered++; });
+   "priority","recImportance","finGoal","savings","income","altOpen","mindset"].forEach(function(k){ if(p[k]) answered++; });
   if(p.roles && p.roles.length) answered++;
   if(p.envs && p.envs.length) answered++;
   if(p.hobbies && p.hobbies.length) answered++;
@@ -1976,7 +2037,7 @@ function rMatchIntake(p) {
     // SECTION 2
     '<div class="qsh">&#128188; 2 &mdash; Role Preferences<div class="qsh-sub">Used to rank, not eliminate options</div></div>' +
     '<div style="margin-bottom:12px"><label class="ql">2.1 Which roles are you most interested in? <em style="font-weight:500;color:var(--mu);font-style:normal">(select up to 3)</em></label>' +
-      chips("roles",[["guest-services","Guest Services / Front Desk"],["food-bev","Food &amp; Beverage"],["kitchen","Kitchen / Cook / Prep"],["housekeeping","Housekeeping"],["maintenance","Maintenance"],["retail","Retail"],["outdoor","Ski / Activity Support"],["labor","General Labor"],["open","Open to most roles"]], 3) + '</div>' +
+      chips("roles", ROLE_OPTS_ALL.concat([["open","Open to most roles"]]), 3) + '</div>' +
     '<div style="margin-bottom:12px"><label class="ql">2.2 Any roles you strongly prefer to avoid?</label><span class="qs">Optional &mdash; used to downrank, not eliminate</span>' +
       '<textarea data-upd="avoidText" placeholder="e.g. food &amp; beverage, housekeeping..." style="margin-top:6px">' + (p.avoidText||"") + '</textarea></div>' +
     '<div style="margin-bottom:12px"><label class="ql">2.3 How important is job type vs. overall experience?</label>' +
@@ -1985,13 +2046,11 @@ function rMatchIntake(p) {
     // SECTION 3
     '<div class="qsh">&#127758; 3 &mdash; Location &amp; Lifestyle Fit<div class="qsh-sub">Helps match you to environments you will actually enjoy</div></div>' +
     '<div style="margin-bottom:12px"><label class="ql">3.1 Which environments appeal to you?</label>' +
-      chips("envs",[["mountain","&#127956; Mountain / ski towns"],["national-park","&#127795; National park / rural"],["coastal","&#127944; Coastal towns"],["small-town","&#127960; Small towns"],["city","&#127749; Cities"]], 0) + '</div>' +
-    '<div style="margin-bottom:12px"><label class="ql">3.2 Shared or employer-provided housing?</label>' +
-      radio("housingPref",[["prefer","Comfortable and prefer it"],["open","Open to it"],["independent","Prefer independent housing if possible"]]) + '</div>' +
-    '<div style="margin-bottom:12px"><label class="ql">3.3 How important is access to hobbies / recreation?</label>' +
+      chips("envs",[["mountain","&#127956; Mountain / ski towns"],["coastal","&#127944; Coastal towns"],["ocean","&#127754; Ocean"],["lake","&#127755; Lake"],["ski-area","&#127935; Ski area"],["national-park","&#127795; National park / rural"],["small-town","&#127960; Small towns"],["city","&#127749; Cities"]], 0) + '</div>' +
+    '<div style="margin-bottom:12px"><label class="ql">3.2 How important is access to hobbies / recreation?</label>' +
       radio("recImportance",[["very","Very important"],["somewhat","Somewhat important"],["not","Not a priority"]]) + '</div>' +
-    '<div style="margin-bottom:12px"><label class="ql">3.4 What hobbies or interests would you love access to?</label>' +
-      chips("hobbies",[["Skiing","&#127940; Skiing / snowboarding"],["Hiking","&#9968; Hiking / outdoors"],["Water sports","&#127946; Water activities"],["Fitness","&#127947; Fitness / gyms"],["Arts","&#127912; Arts / music / culture"],["Social scene","&#127881; Social scene"],["not-factor","Not a major factor"]], 0) + '</div>' +
+    '<div style="margin-bottom:12px"><label class="ql">3.3 What hobbies or interests would you love access to?</label>' +
+      chips("hobbies", ACTIVITY_OPTS.concat([["not-factor","Not a major factor"]]), 0) + '</div>' +
 
     // SECTION 4
     '<div class="qsh">&#128176; 4 &mdash; Financial Goals<div class="qsh-sub">Key to cost-positive matching</div></div>' +
@@ -2031,7 +2090,7 @@ function rLiveMatch(p,pathway){
   if(filled<1) return '<div class="card" style="text-align:center;padding:2rem;color:var(--mu);font-size:12px"><div style="font-size:28px;margin-bottom:10px">&#9968;</div>Answer a few questions to see your profile take shape</div>';
 
   // Score all jobs
-  var scored=jobs.map(function(j){return Object.assign({},j,{score:scoreJob(j,p)});}).sort(function(a,b){return b.score.overall-a.score.overall;});
+  var scored=jobs.filter(function(j){return !j.archived;}).map(function(j){return Object.assign({},j,{score:scoreJob(j,p)});}).sort(function(a,b){return b.score.overall-a.score.overall;});
 
   // Summarise which JOB TYPES match best (not individual listings)
   var typeMap={};
@@ -2228,7 +2287,7 @@ function rAdmStu(){
 
   return header + visList.map(function(s){
     return '<div class="card"'+(!s.visibility?' style="opacity:.65"':'')+'><div style="display:flex;justify-content:space-between;align-items:flex-start">'+
-      '<div><div style="font-family:Nunito,sans-serif;font-weight:700">'+s.name+'</div><div style="color:var(--mu);font-size:11px">'+s.age+' · '+s.location+'</div></div>'+
+      '<div><div style="font-family:Nunito,sans-serif;font-weight:700">'+s.name+'</div><div style="color:var(--mu);font-size:11px">'+(s.age!=null?'Age '+s.age:'Age —')+' · '+(s.location||'—')+' · Last login: '+fmtLastLogin(s.lastLogin)+'</div></div>'+
       '<div>'+bdg(s.profileScore+'%',"bb")+'&nbsp;'+(s.visibility?bdg("visible","bt"):bdg("hidden","bg"))+'</div></div>'+
       '<div class="prb" style="margin:6px 0"><div class="prf" style="width:'+s.profileScore+'%"></div></div>'+
       '<div class="tr">'+s.industries.map(function(i){return bdg(i,IC[i]||"bg");}).join("")+'</div>'+
@@ -2244,12 +2303,33 @@ function rAdmStu(){
 function rAdmEmp(){
   return '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div class="shd" style="margin:0">Employers ('+employers.length+')</div><div style="display:flex;gap:7px"><button class="btn btn-xs btn-b" data-action="addjob" data-id="0">+ Add job</button><button class="btn btn-p btn-xs" data-action="addemp">+ Add employer</button></div></div>'+
   employers.map(function(e){
-    return '<div class="lr" style="cursor:default"><div class="el" style="font-size:26px;overflow:hidden">'+empLogo(e)+'</div><div class="lb2"><div class="lt">'+e.name+' '+(e.verified?bdg("Verified","bt"):bdg("Unverified","bc"))+'</div><div class="lm"><span>'+e.region+'</span><span>'+e.industry+'</span><span>'+jobs.filter(function(j){return j.empId===e.id;}).length+' listings</span><span>'+e.placements+' placed</span></div></div>'+
+    var myJobs=jobs.filter(function(j){return j.empId===e.id;});
+    var archBadge=e.archived?bdg("Archived","bc"):"";
+    return '<div class="lr" style="cursor:default;'+(e.archived?'opacity:.6':'')+'"><div class="el" style="font-size:26px;overflow:hidden">'+empLogo(e)+'</div><div class="lb2"><div class="lt">'+e.name+' '+(e.verified?bdg("Verified","bt"):bdg("Unverified","bc"))+archBadge+'</div><div class="lm"><span>'+e.region+'</span><span>'+e.industry+'</span><span>'+myJobs.length+' listings</span><span>'+e.placements+' placed</span></div></div>'+
       '<div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end">'+
         '<button class="btn btn-xs" data-action="editemp" data-id="'+e.id+'">Edit</button>'+
         (!e.verified?'<button class="btn btn-xs btn-a" data-action="verify" data-id="'+e.id+'">Verify</button>':"")+
         '<button class="btn btn-xs btn-b" data-action="adminphotos" data-id="'+e.id+'">📸 Photos</button>'+
-        '<button class="btn btn-xs btn-p" data-action="addjob" data-id="'+e.id+'">+ Job</button></div></div>';
+        '<button class="btn btn-xs btn-p" data-action="addjob" data-id="'+e.id+'">+ Job</button>'+
+        (e.archived
+          ? '<button class="btn btn-xs btn-a" data-action="unarchemp" data-id="'+e.id+'">Un-archive</button>'
+          : '<button class="btn btn-xs" data-action="archemp" data-id="'+e.id+'">Archive</button>')+
+        '<button class="btn btn-xs btn-d" data-action="delemp" data-id="'+e.id+'">Delete</button></div></div>'+
+      // Per-employer job list with edit / duplicate / archive / delete
+      (myJobs.length?'<div style="margin:-2px 0 10px 14px;padding-left:14px;border-left:2px solid var(--brd)">'+
+        myJobs.map(function(j){
+          return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--brd)'+(j.archived?';opacity:.6':'')+'">'+
+            '<div style="min-width:0"><div style="font-size:12px;font-weight:600;font-family:Nunito,sans-serif;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+j.title+' '+(j.archived?bdg("Archived","bc"):'<span class="sp '+(j.status==="open"?"sp-o":"sp-f")+'" style="font-size:9px;padding:2px 6px">'+(j.status||'').toUpperCase()+'</span>')+'</div><div style="font-size:10px;color:var(--mu)">'+j.season+' · '+j.startMonth+' · '+j.salaryDisplay+'</div></div>'+
+            '<div style="display:flex;gap:4px;flex-shrink:0">'+
+              '<button class="btn btn-xs" data-action="editjob" data-id="'+j.id+'">Edit</button>'+
+              '<button class="btn btn-xs btn-b" data-action="dupjob" data-id="'+j.id+'">Duplicate</button>'+
+              (j.archived
+                ? '<button class="btn btn-xs btn-a" data-action="unarchjob" data-id="'+j.id+'">Un-archive</button>'
+                : '<button class="btn btn-xs" data-action="archjob" data-id="'+j.id+'">Archive</button>')+
+              '<button class="btn btn-xs btn-d" data-action="deljob" data-id="'+j.id+'">Delete</button>'+
+            '</div></div>';
+        }).join("")+
+      '</div>':"");
   }).join("");
 }
 function rAdmApp(){
@@ -2768,6 +2848,99 @@ async function verifyEmp(eid){
   await hydrateAndRender();
 }
 
+// ---- Archive / hard-delete / duplicate (admin) ----------------------------
+// Archive = reversible flag that hides the row from participants (RLS in
+// migration 0005 enforces it server-side). Delete = permanent.
+
+async function archiveEmp(eid, archived){
+  if(!eid) return;
+  try {
+    var r = await window.sb.from('employers').update({ archived: !!archived }).eq('id', eid);
+    if(r.error) throw r.error;
+  } catch(e){ console.error('archive employer failed', e); showAlert({type:'error',title:'Could not update',body:e.message||String(e)}); return; }
+  await hydrateAndRender();
+}
+function confirmArchiveEmp(eid, archived){
+  var e = E(eid); if(!e) return;
+  var n = jobs.filter(function(j){return j.empId===eid;}).length;
+  showConfirm({
+    icon:'📦', title:'Archive '+escHtml(e.name)+'?',
+    body:'Participants will no longer see this employer'+(n?' or its '+n+' job listing'+(n===1?'':'s'):'')+'. You can un-archive it anytime.',
+    confirmLabel:'Archive', confirmClass:'btn-b',
+    onConfirm:function(){ archiveEmp(eid, true); }
+  });
+}
+function confirmDeleteEmp(eid){
+  var e = E(eid); if(!e) return;
+  var n = jobs.filter(function(j){return j.empId===eid;}).length;
+  showConfirm({
+    icon:'🗑️', title:'Permanently delete '+escHtml(e.name)+'?',
+    body:'This cannot be undone. It permanently deletes the employer'+(n?', its '+n+' job listing'+(n===1?'':'s'):'')+', and every related application and message. Consider archiving instead.',
+    confirmLabel:'Delete forever', confirmClass:'btn-d',
+    onConfirm:async function(){
+      try {
+        var r = await window.sb.from('employers').delete().eq('id', eid);
+        if(r.error) throw r.error;
+      } catch(err){ console.error('delete employer failed', err); showAlert({type:'error',title:'Delete failed',body:err.message||String(err)}); return; }
+      await hydrateAndRender();
+    }
+  });
+}
+
+async function archiveJob(jid, archived){
+  if(!jid) return;
+  try {
+    var r = await window.sb.from('jobs').update({ archived: !!archived }).eq('id', jid);
+    if(r.error) throw r.error;
+  } catch(e){ console.error('archive job failed', e); showAlert({type:'error',title:'Could not update',body:e.message||String(e)}); return; }
+  await hydrateAndRender();
+}
+function confirmArchiveJob(jid, archived){
+  var j = J(jid); if(!j) return;
+  showConfirm({
+    icon:'📦', title:'Archive “'+escHtml(j.title)+'”?',
+    body:'Participants will no longer see this job listing. You can un-archive it anytime.',
+    confirmLabel:'Archive', confirmClass:'btn-b',
+    onConfirm:function(){ archiveJob(jid, true); }
+  });
+}
+function confirmDeleteJob(jid){
+  var j = J(jid); if(!j) return;
+  showConfirm({
+    icon:'🗑️', title:'Permanently delete “'+escHtml(j.title)+'”?',
+    body:'This cannot be undone. It permanently deletes this job and every related application and message. Consider archiving instead.',
+    confirmLabel:'Delete forever', confirmClass:'btn-d',
+    onConfirm:async function(){
+      try {
+        var r = await window.sb.from('jobs').delete().eq('id', jid);
+        if(r.error) throw r.error;
+      } catch(err){ console.error('delete job failed', err); showAlert({type:'error',title:'Delete failed',body:err.message||String(err)}); return; }
+      await hydrateAndRender();
+    }
+  });
+}
+
+// Duplicate a job: copy the raw DB row into a new "(Copy)" draft. Resets
+// per-instance counters and starts the copy ARCHIVED so it's hidden from
+// participants until the admin edits and un-archives it. CPI recomputes
+// server-side via the jobs_compute_cpi trigger.
+async function duplicateJob(jid){
+  if(!jid) return;
+  try {
+    var src = await window.sb.from('jobs').select('*').eq('id', jid).single();
+    if(src.error) throw src.error;
+    var row = Object.assign({}, src.data);
+    delete row.id; delete row.created_at; delete row.updated_at; delete row.cpi;
+    // Keep the original title — no "(Copy)" suffix (per client request).
+    row.filled = 0;
+    row.status = 'open';
+    row.archived = false; // publish immediately (visible to participants), not archived
+    var ins = await window.sb.from('jobs').insert(row);
+    if(ins.error) throw ins.error;
+  } catch(e){ console.error('duplicate job failed', e); showAlert({type:'error',title:'Duplicate failed',body:e.message||String(e)}); return; }
+  await hydrateAndRender();
+}
+
 // Flag a participant whose profile is under 70% complete. Fans an
 // `incomplete_profile_reminder` notification out to every admin — the email
 // template + bell entry then surface the case for outreach.
@@ -2944,7 +3117,7 @@ function toggleChip(el) {
   }
   // Job form chips (jf_ prefix) - toggle .on visually, enforce single for season/env/savings
   if(field && field.startsWith('jf_')) {
-    if(field === 'jf_season' || field === 'jf_env' || field === 'jf_savings') {
+    if(field === 'jf_season' || field === 'jf_savings') {
       document.querySelectorAll('[data-field="'+field+'"]').forEach(function(c){ c.classList.remove('on'); });
     }
     el.classList.toggle('on');
@@ -2989,21 +3162,32 @@ function openEditProfile(){
     '</div>'+
     '<div class="c2"><div><span class="fl">Name</span><input type="text" id="sf-n" value="'+esc(s.name)+'"></div><div><span class="fl">Location</span><input type="text" id="sf-l" value="'+esc(s.location)+'" placeholder="City, State"></div></div>'+
     '<span class="fl">Bio</span><textarea id="sf-b" placeholder="Tell us a little about yourself...">'+esc(s.bio)+'</textarea>'+
-    '<p style="font-size:11px;color:var(--mu);margin-top:12px;line-height:1.5">'+
-      'Availability dates, industry preferences, destinations and skills now live in the '+
-      '<strong>Match profile</strong> tab — your matchmaking signals are scored from there.'+
-    '</p>'+
+    '<div class="c2"><div><span class="fl">Birthdate</span><input type="date" id="sf-bd" value="'+esc(s.birthdate)+'"></div>'+
+    '<div><span class="fl">Timezone</span><select id="sf-tz">'+[['','Select...'],['Eastern','Eastern'],['Central','Central'],['Mountain','Mountain'],['Pacific','Pacific'],['Alaska','Alaska'],['Hawaii','Hawaii'],['Atlantic','Atlantic']].map(function(o){return '<option value="'+o[0]+'"'+(s.timezone===o[0]?' selected':'')+'>'+o[1]+'</option>';}).join('')+'</select></div></div>'+
+    '<span class="fl">Interview availability — times</span><div style="display:flex;gap:14px;flex-wrap:wrap;margin:4px 0 8px">'+[['morning','Morning'],['afternoon','Afternoon'],['evening','Evening']].map(function(o){var on=(s.availTimes||[]).indexOf(o[0])>=0;return '<label style="display:flex;align-items:center;gap:5px;font-size:12px"><input type="checkbox" class="sf-time" value="'+o[0]+'"'+(on?' checked':'')+'> '+o[1]+'</label>';}).join('')+'</div>'+
+    '<span class="fl">Interview availability — days</span><div style="display:flex;gap:10px;flex-wrap:wrap;margin:4px 0 8px">'+[['Mon','M'],['Tue','Tu'],['Wed','W'],['Thu','Th'],['Fri','F'],['Sat','Sa'],['Sun','Su']].map(function(o){var on=(s.availDays||[]).indexOf(o[0])>=0;return '<label style="display:flex;align-items:center;gap:4px;font-size:12px"><input type="checkbox" class="sf-day" value="'+o[0]+'"'+(on?' checked':'')+'> '+o[1]+'</label>';}).join('')+'</div>'+
+    '<span class="fl">Industry interests</span><input type="text" id="sf-ind" value="'+esc((s.industries||[]).join(', '))+'" placeholder="e.g. Hospitality, Outdoor recreation (comma-separated)">'+
+    '<span class="fl">Skills</span><textarea id="sf-sk" placeholder="Your skills...">'+esc(s.skills)+'</textarea>'+
+    '<div style="font-size:10px;color:var(--mu);margin-top:2px">Image badges from the Life Skills course are coming soon.</div>'+
     '<div class="mf2"><button class="btn btn-xs" data-action="closemod">Cancel</button><button class="btn btn-xs btn-p" data-action="saveprofile">Save</button></div>');
 }
 async function saveProfile(){
   if (!currentUser) return;
   var name = document.getElementById("sf-n").value || '';
   var parts = name.trim().split(/\s+/);
+  function getVal(id){var el=document.getElementById(id);return el?el.value:'';}
+  function checkedVals(cls){return [].slice.call(document.querySelectorAll('.'+cls+':checked')).map(function(c){return c.value;});}
   var patch = {
     first_name: parts[0] || '',
     last_name: parts.slice(1).join(' ') || null,
-    location: document.getElementById("sf-l").value || null,
-    bio: document.getElementById("sf-b").value || null,
+    location: getVal("sf-l") || null,
+    bio: getVal("sf-b") || null,
+    birthdate: getVal("sf-bd") || null,
+    timezone: getVal("sf-tz") || null,
+    avail_times: checkedVals('sf-time'),
+    avail_days: checkedVals('sf-day'),
+    industry_interests: (getVal("sf-ind")||'').split(',').map(function(x){return x.trim();}).filter(Boolean),
+    skills: getVal("sf-sk") || null,
   };
   try {
     await window.DB.updateProfile(currentUser.id, patch);
@@ -3013,19 +3197,45 @@ async function saveProfile(){
 }
 function openAdminStudentEdit(sid){
   var s=S(sid);
-  showModal('<h3>Edit student</h3>'+
-    '<div class="c2"><div><span class="fl">Name</span><input type="text" id="as-n" value="'+s.name+'"></div><div><span class="fl">Profile score</span><input type="number" id="as-sc" min="0" max="100" value="'+s.profileScore+'"></div></div>'+
-    '<span class="fl">Internal notes</span><textarea id="as-nt">'+s.notes+'</textarea>'+
+  function esc(v){return (v||'').toString().replace(/"/g,'&quot;');}
+  var ph = s.photo || photoStore['stu-'+sid] || '';
+  var initials = ((s.firstName||s.name||'?')[0]||'?').toUpperCase();
+  var avatar = ph
+    ? '<img src="'+esc(ph)+'" alt="" style="width:64px;height:64px;border-radius:50%;object-fit:cover;border:2px solid var(--brd)">'
+    : '<div style="width:64px;height:64px;border-radius:50%;background:var(--or);color:#fff;display:flex;align-items:center;justify-content:center;font-family:Nunito,sans-serif;font-weight:900;font-size:22px">'+initials+'</div>';
+  showModal('<h3>Edit participant</h3>'+
+    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">'+
+      '<div data-photo-slot="stu-'+sid+'" style="position:relative;width:64px;height:64px;border-radius:50%;overflow:hidden;flex:0 0 64px">'+avatar+'</div>'+
+      '<label class="btn btn-xs" style="cursor:pointer;display:inline-block">Change photo<input type="file" accept="image/*" data-photo="stu-'+sid+'" style="display:none"></label>'+
+    '</div>'+
+    '<div class="c2"><div><span class="fl">Name</span><input type="text" id="as-n" value="'+esc(s.name)+'"></div><div><span class="fl">Profile score</span><input type="number" id="as-sc" min="0" max="100" value="'+s.profileScore+'"></div></div>'+
+    '<span class="fl">Bio</span><textarea id="as-bio" placeholder="Participant bio...">'+esc(s.bio)+'</textarea>'+
+    '<span class="fl">Industry interests</span><input type="text" id="as-ind" value="'+esc((s.industries||[]).join(', '))+'" placeholder="comma-separated">'+
+    '<span class="fl">Skills</span><textarea id="as-sk" placeholder="Skills...">'+esc(s.skills)+'</textarea>'+
+    '<span class="fl">Internal notes</span><textarea id="as-nt">'+esc(s.notes)+'</textarea>'+
     '<span class="fl">Visibility</span><select id="as-v"><option value="1"'+(s.visibility?" selected":"")+'>Public</option><option value="0"'+(!s.visibility?" selected":"")+'>Hidden</option></select>'+
     '<div class="mf2"><button class="btn btn-xs" data-action="closemod">Cancel</button><button class="btn btn-xs btn-p" data-action="savestudent" data-id="'+sid+'">Save</button></div>');
 }
-function saveAdminStudent(sid){
-  var s=S(sid);
-  s.name=document.getElementById("as-n").value;
-  s.profileScore=parseInt(document.getElementById("as-sc").value)||s.profileScore;
-  s.notes=document.getElementById("as-nt").value;
-  s.visibility=document.getElementById("as-v").value==="1";
-  closeModal();render();
+async function saveAdminStudent(sid){
+  function getVal(id){var el=document.getElementById(id);return el?el.value:'';}
+  var name=(getVal("as-n")||'').trim();
+  var parts=name.split(/\s+/);
+  var patch={
+    first_name: parts[0]||'',
+    last_name: parts.slice(1).join(' ')||null,
+    bio: getVal("as-bio")||null,
+    skills: getVal("as-sk")||null,
+    industry_interests: (getVal("as-ind")||'').split(',').map(function(x){return x.trim();}).filter(Boolean),
+    admin_notes: getVal("as-nt")||null,
+    profile_score: parseInt(getVal("as-sc"),10),
+    visibility: getVal("as-v")==="1",
+  };
+  if(isNaN(patch.profile_score)) delete patch.profile_score;
+  try {
+    await window.DB.updateProfile(sid, patch);
+  } catch(e){ console.error('saveAdminStudent failed', e); showAlert({type:'error',title:'Save failed',body:e.message||String(e)}); return; }
+  closeModal();
+  await hydrateAndRender();
 }
 function openMatchModal(sid){
   var s=S(sid);var p=s.pd;
@@ -3333,33 +3543,27 @@ function rAdmJobForm(){
   // Pull seeded values from existing job for edit mode.
   var seed = j ? {
     title:j.title||'', desc:j.description||'',
-    qual:j.requirements||'', pay:(j.pay||'').toString().replace(/[^\d.]/g,''),
+    qual:j.requirements||'', pay:(j.payMin!=null?j.payMin:'').toString(),
     slots:j.slots||1, hrs:j.hrs||40, exp:j.experience||'none',
     sm:j.startMonth||'', em:j.endMonth||'',
-    season:j.season||'', env:j.env||'', savingsLevel:j.savingsLevel||'',
-    ht:j.housing&&j.housing.type||'', hc:(j.housing&&j.housing.cost||'').toString().replace(/[^\d.]/g,''),
+    season:j.season||'', env:j.env||'', envs:j.envs||[], savingsLevel:j.savingsLevel||'',
+    payMax:(j.payMax||'').toString().replace(/[^\d.]/g,''),
+    ht:j.housing&&j.housing.type||'', hc:(j.housing&&j.housing.costMin||'').toString().replace(/[^\d.]/g,''),
+    hcMax:(j.housing&&j.housing.costMax||'').toString().replace(/[^\d.]/g,''),
     hm:j.housing&&j.housing.meals||'',
     requiresLicense:!!j.requiresLicense, requiresPassport:!!j.requiresPassport,
-    isTipped:!!j.isTipped,
+    isTipped:!!j.isTipped, age21:!!j.age21,
+    socialEnergy:j.socialEnergy||'', nightlife:j.nightlife||'',
     jobRoles:j.jobRoles||[], hobbies:j.hobbies||[],
-  } : { jobRoles:[], hobbies:[] };
+  } : { jobRoles:[], hobbies:[], envs:[] };
 
   var SEAS=['winter','spring','summer','fall','year-round'];
-  var ENVS=[['mountain','&#127956; Mountain'],['coastal','&#127944; Coastal'],['national-park','&#127795; National park / rural'],['small-town','&#127960; Small town'],['city','&#127749; City']];
+  var ENVS=[['mountain','&#127956; Mountain'],['coastal','&#127944; Coastal'],['ocean','&#127754; Ocean'],['lake','&#127755; Lake'],['ski-area','&#127935; Ski area'],['national-park','&#127795; National park / rural'],['small-town','&#127960; Small town'],['city','&#127749; City']];
   var SAVS=[['low','Low ($0–2k)'],['mid','Mid ($2–4k)'],['high','High ($4k+)']];
   // Mirror the role + hobby options participants choose from in rMatchIntake
   // so matching has any chance of overlapping.
-  var ROLE_OPTS=[
-    ['guest-services','Guest Services / Front Desk'],['food-bev','Food &amp; Beverage'],
-    ['kitchen','Kitchen / Cook / Prep'],['housekeeping','Housekeeping'],
-    ['maintenance','Maintenance'],['retail','Retail'],
-    ['outdoor','Ski / Activity Support'],['labor','General Labor'],
-  ];
-  var HOBBY_OPTS=[
-    ['Skiing','Skiing / snowboarding'],['Hiking','Hiking / outdoors'],
-    ['Water sports','Water activities'],['Fitness','Fitness / gyms'],
-    ['Arts','Arts / music'],['Social scene','Social scene'],
-  ];
+  var ROLE_OPTS=ROLE_OPTS_ALL;
+  var HOBBY_OPTS=ACTIVITY_OPTS;
 
   function chipBlock(field, opts, selected){
     return '<div class="cg">'+opts.map(function(o){
@@ -3385,12 +3589,15 @@ function rAdmJobForm(){
     '<textarea id="jf-desc" class="ainp" placeholder="Describe day-to-day responsibilities, team culture, what makes this role unique..." style="min-height:100px">'+(seed.desc||'')+'</textarea></div>'+
     '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:5px">Position qualifications</label>'+
     '<textarea id="jf-req" class="ainp" placeholder="Required skills, certifications, experience level, physical requirements..." style="min-height:80px">'+(seed.qual||'')+'</textarea></div>'+
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'+
-    '<div><label class="fl" style="margin-top:0;margin-bottom:5px">Pay rate per hour</label>'+
-    '<input type="text" id="jf-p" class="ainp" placeholder="e.g. 18" value="'+(seed.pay||'')+'"></div>'+
+    '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:4px">'+
+    '<div><label class="fl" style="margin-top:0;margin-bottom:5px">Pay rate / hr (min)</label>'+
+    '<input type="text" id="jf-p" class="ainp" placeholder="e.g. 16" value="'+(seed.pay||'')+'"></div>'+
+    '<div><label class="fl" style="margin-top:0;margin-bottom:5px">Pay max (optional)</label>'+
+    '<input type="text" id="jf-pmax" class="ainp" placeholder="e.g. 18" value="'+(seed.payMax||'')+'"></div>'+
     '<div><label class="fl" style="margin-top:0;margin-bottom:5px">Number of positions</label>'+
     '<input type="number" id="jf-slots" class="ainp" placeholder="e.g. 4" min="1" value="'+(seed.slots||1)+'"></div>'+
     '</div>'+
+    '<div style="font-size:11px;color:var(--mu);margin-bottom:12px">Leave max blank for a single rate. CPI uses the min (base) rate.</div>'+
     '<div class="qsh" style="margin-top:16px">&#127919; Role categories <span style="font-weight:400;color:var(--mu);font-size:11px">(used for matching)</span></div>'+
     '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:7px">Which roles does this position fall under? (pick all that apply)</label>'+
     chipBlock('roles', ROLE_OPTS, seed.jobRoles)+'</div>'+
@@ -3417,16 +3624,23 @@ function rAdmJobForm(){
     '</div>'+
 
     '<div class="qsh" style="margin-top:16px">&#127757; Environment &amp; Lifestyle</div>'+
-    '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:7px">Environment (pick one)</label>'+
-    '<div class="cg">'+ENVS.map(function(o){var on=seed.env===o[0];return '<div class="chip'+(on?' on':'')+'" data-action="chip" data-field="jf_env" data-val="'+o[0]+'">'+o[1]+'</div>';}).join('')+'</div></div>'+
+    '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:7px">Environments (pick all that apply)</label>'+
+    '<div class="cg">'+ENVS.map(function(o){var on=(seed.envs||[]).indexOf(o[0])>=0||(!(seed.envs||[]).length&&seed.env===o[0]);return '<div class="chip'+(on?' on':'')+'" data-action="chip" data-field="jf_env" data-val="'+o[0]+'">'+o[1]+'</div>';}).join('')+'</div></div>'+
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'+
+    '<div><label class="fl" style="margin-top:0;margin-bottom:5px">Social energy</label>'+
+    '<select id="jf-soc" class="ainp"><option value="">Select...</option>'+[['very-active','Very Active'],['active','Active'],['moderate','Moderate'],['relaxed','Relaxed'],['quiet','Quiet']].map(function(o){return '<option value="'+o[0]+'"'+(seed.socialEnergy===o[0]?' selected':'')+'>'+o[1]+'</option>';}).join('')+'</select></div>'+
+    '<div><label class="fl" style="margin-top:0;margin-bottom:5px">Nightlife</label>'+
+    '<select id="jf-night" class="ainp"><option value="">Select...</option>'+[['extensive','Extensive'],['moderate','Moderate'],['limited','Limited'],['minimal','Minimal']].map(function(o){return '<option value="'+o[0]+'"'+(seed.nightlife===o[0]?' selected':'')+'>'+o[1]+'</option>';}).join('')+'</select></div>'+
+    '</div>'+
     '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:7px">Hobbies / interests this role supports</label>'+
     chipBlock('hobbies', HOBBY_OPTS, seed.hobbies)+'</div>'+
 
     '<div class="qsh" style="margin-top:16px">&#128176; Earnings &amp; logistics</div>'+
     '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:7px">Savings potential (pick one)</label>'+
     '<div class="cg">'+SAVS.map(function(o){var on=seed.savingsLevel===o[0];return '<div class="chip'+(on?' on':'')+'" data-action="chip" data-field="jf_savings" data-val="'+o[0]+'">'+o[1]+'</div>';}).join('')+'</div></div>'+
-    '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">'+
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">'+
     '<label style="display:flex;align-items:center;gap:6px;font-size:12px"><input type="checkbox" id="jf-tip"'+(seed.isTipped?' checked':'')+'> Tipped role</label>'+
+    '<label style="display:flex;align-items:center;gap:6px;font-size:12px"><input type="checkbox" id="jf-21"'+(seed.age21?' checked':'')+'> 21+ only</label>'+
     '<label style="display:flex;align-items:center;gap:6px;font-size:12px"><input type="checkbox" id="jf-lic"'+(seed.requiresLicense?' checked':'')+'> Requires driver license</label>'+
     '<label style="display:flex;align-items:center;gap:6px;font-size:12px"><input type="checkbox" id="jf-pass"'+(seed.requiresPassport?' checked':'')+'> Requires passport</label>'+
     '</div>'+
@@ -3435,9 +3649,11 @@ function rAdmJobForm(){
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'+
     '<div><label class="fl" style="margin-top:0;margin-bottom:5px">Housing type</label>'+
     '<input type="text" id="jf-ht" class="ainp" placeholder="e.g. Shared dorm, Private cabin" value="'+(seed.ht||'')+'"></div>'+
-    '<div><label class="fl" style="margin-top:0;margin-bottom:5px">Housing cost / mo ($)</label>'+
+    '<div><label class="fl" style="margin-top:0;margin-bottom:5px">Housing cost / mo (min $)</label>'+
     '<input type="number" id="jf-hc" class="ainp" step="1" min="0" placeholder="0 = included" value="'+(seed.hc||'')+'"></div>'+
     '</div>'+
+    '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:5px">Housing cost max / mo (optional $)</label>'+
+    '<input type="number" id="jf-hcmax" class="ainp" step="1" min="0" placeholder="leave blank for single cost" value="'+(seed.hcMax||'')+'"></div>'+
     '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:5px">Meals provided</label>'+
     '<input type="text" id="jf-hm" class="ainp" placeholder="e.g. 3 meals/day, Breakfast only, None" value="'+(seed.hm||'')+'"></div>'+
     '<div style="font-size:11px;color:var(--mu);margin-bottom:6px">CPI is computed automatically from pay rate &amp; housing cost — no need to enter it.</div>'+
@@ -3469,10 +3685,14 @@ async function saveJobFull(eid, jid) {
   function enumOr(val, allowed){return allowed.indexOf(val)>=0?val:null;}
   function strOrNull(s){return s?s:null;}
 
+  function numOrNull(s){var n=parseFloat(s);return isNaN(n)?null:n;}
+  var payMax = numOrNull(v('pmax'));
+  var hcMax = numOrNull(v('hcmax'));
   var patch = {
     employer_id: empId,
     title: title,
     pay_rate: parseFloat(v('p')) || 0,
+    pay_rate_max: payMax,
     season: enumOr((seasonArr[0]||'summer').toLowerCase(), ['winter','spring','summer','fall','year-round']),
     start_month: strOrNull(v('sm')),
     end_month: strOrNull(v('em')),
@@ -3483,14 +3703,19 @@ async function saveJobFull(eid, jid) {
     description: strOrNull(v('desc')),
     housing_type: strOrNull(v('ht')),
     housing_cost: parseFloat(v('hc')) || 0,
+    housing_cost_max: hcMax,
     meals: strOrNull(v('hm')),
     env: strOrNull(envArr[0]) || 'mountain',
+    envs: envArr,
+    social_energy: strOrNull(v('soc')),
+    nightlife: strOrNull(v('night')),
     job_roles: chipVals('roles'),
     hobbies: chipVals('hobbies'),
     savings_level: enumOr(savingsArr[0] || 'mid', ['low','mid','high']),
     requires_license: chk('lic'),
     requires_passport: chk('pass'),
     is_tipped: chk('tip'),
+    age_21: chk('21'),
   };
 
   try {
@@ -3644,13 +3869,25 @@ function boot() {
     currentUser = legacyUser(profile);
     resolved = true;
 
-    // TOKEN_REFRESHED and USER_UPDATED fire silently every ~50-60 minutes as
-    // Supabase rotates the JWT. The underlying profile/program_profile data
-    // hasn't changed — re-hydrating would replace the in-memory students[]
-    // array with stale DB rows and wipe any unsaved Match-profile edits the
-    // user is currently typing. Refresh currentUser (so the new JWT-derived
-    // photo_url / email take effect) but skip the data re-pull.
-    if (!wasFirstLoad && (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED')) {
+    // Stamp last_login on a genuine sign-in (not silent token refreshes, which
+    // return early below). Fire-and-forget; RLS lets a user update own profile.
+    if (wasFirstLoad) {
+      try { window.sb.from('profiles').update({ last_login: new Date().toISOString() }).eq('id', profile.id).then(function(){}, function(){}); } catch(_){}
+    }
+
+    // Once a user is already logged in this session, Supabase re-fires auth
+    // events that don't carry new data:
+    //   - TOKEN_REFRESHED / USER_UPDATED: silent JWT rotation (~hourly)
+    //   - SIGNED_IN / INITIAL_SESSION: re-fired when the tab regains focus
+    //     (e.g. switching back from VS Code / another window)
+    // Re-hydrating + re-rendering on any of these rebuilds #main and WIPES
+    // whatever the user is currently typing into an open form (job/employer/
+    // profile). So for a non-first-load re-fire we refresh currentUser only
+    // and skip the data re-pull + render entirely.
+    if (!wasFirstLoad && (
+      event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED' ||
+      event === 'SIGNED_IN' || event === 'INITIAL_SESSION'
+    )) {
       return;
     }
 
