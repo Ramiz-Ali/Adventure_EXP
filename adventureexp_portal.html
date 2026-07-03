@@ -317,6 +317,8 @@ textarea{resize:vertical;min-height:70px}
    them to the same height so side-by-side fields line up (textareas use
    min-height, so they're unaffected). */
 input.ainp,select.ainp{height:46px}
+/* Room for the native dropdown chevron so the value doesn't crowd it. */
+select.ainp{padding-right:30px}
 .apw{position:relative}
 .apw .ainp{padding-right:64px}
 .ashowhide{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:12px;font-family:"Nunito",sans-serif;font-weight:700;color:var(--mu);padding:4px 8px;border-radius:5px}
@@ -633,6 +635,8 @@ document.addEventListener('input',function(e){
   if(spu&&spu.files&&spu.files[0]){var r=new FileReader();r.onload=function(ev){signupPhoto=ev.target.result;snapshotSignupForm();render();};r.readAsDataURL(spu.files[0]);return;}
 });
 document.addEventListener('change',function(e){
+  var dp=e.target.closest('[data-datepart]');
+  if(dp){handleDatePart(dp);return;}
   var u=e.target.closest('[data-upd]');
   if(u){upPD(u.dataset.upd,u.value);return;}
   var ph=e.target.closest('[data-photo]');
@@ -1880,7 +1884,7 @@ function rJobDetail(jid){
       info('Website', er.website?'<a href="'+er.website+'" target="_blank" style="color:var(--bl-dk)">'+er.website+'</a>':'')+
       info('Address', er.address)+
       info('Nearest airport', er.nearest_airport)+
-      info('Transport to/from airport', er.transportation)+
+      info('Transport to/from airport', er.transportation?cap(er.transportation):'')+
       info('Pay frequency', er.pay_frequency?cap(er.pay_frequency):'')+
       info('Benefits', er.benefits)+
       info('Meals provided', j.housing&&j.housing.meals)+
@@ -2073,8 +2077,8 @@ function rMatchIntake(p) {
 
     // SECTION 1
     '<div class="qsh">&#128197; 1 &mdash; Availability &amp; Timing<div class="qsh-sub">Highest impact on matching</div></div>' +
-    '<div style="margin-bottom:12px"><label class="ql">1.1 Earliest start date</label><input type="date" data-upd="startDate" min="2025-01-01" max="2030-12-31" value="' + (p.startDate||"") + '"></div>' +
-    '<div style="margin-bottom:12px"><label class="ql">1.2 Latest start date</label><input type="date" data-upd="endDate" min="2025-01-01" max="2030-12-31" value="' + (p.endDate||"") + '"></div>' +
+    '<div style="margin-bottom:12px"><label class="ql">1.1 Earliest start date</label>' + dateSelect('startDate', p.startDate||"") + '</div>' +
+    '<div style="margin-bottom:12px"><label class="ql">1.2 Latest start date</label>' + dateSelect('endDate', p.endDate||"") + '</div>' +
     '<div style="margin-bottom:12px"><label class="ql">1.3 Minimum program length</label>' +
       radio("minDuration",[["2-3","2&#8211;3 months"],["3-4","3&#8211;4 months"],["4-6","4&#8211;6 months"],["open","Open-ended"]]) + '</div>' +
     '<div style="margin-bottom:12px"><label class="ql">1.4 Start date flexibility</label>' +
@@ -2098,7 +2102,7 @@ function rMatchIntake(p) {
     // SECTION 3
     '<div class="qsh">&#127758; 3 &mdash; Location &amp; Lifestyle Fit<div class="qsh-sub">Helps match you to environments you will actually enjoy</div></div>' +
     '<div style="margin-bottom:12px"><label class="ql">3.1 Which environments appeal to you?</label>' +
-      chips("envs",[["mountain","&#127956;&#65039; Mountain / ski towns"],["coastal","&#127754; Coastal towns"],["ocean","&#128026; Ocean"],["lake","&#128246; Lake"],["ski-area","&#127935; Ski area"],["national-park","&#127794; National park / rural"],["small-town","&#127960;&#65039; Small towns"],["city","&#127750; Cities"]], 0) + '</div>' +
+      chips("envs",[["mountain","&#127956;&#65039; Mountain / ski towns"],["coastal","&#127754; Coastal towns"],["ocean","&#128026; Ocean"],["lake","&#128758; Lake"],["ski-area","&#127935; Ski area"],["national-park","&#127794; National park / rural"],["small-town","&#127960;&#65039; Small towns"],["city","&#127750; Cities"]], 0) + '</div>' +
     '<div style="margin-bottom:12px"><label class="ql">3.2 How important is access to hobbies / recreation?</label>' +
       radio("recImportance",[["very","Very important"],["somewhat","Somewhat important"],["not","Not a priority"]]) + '</div>' +
     '<div style="margin-bottom:12px"><label class="ql">3.3 What hobbies or interests would you love access to?</label>' +
@@ -3155,6 +3159,40 @@ function upPD(field,val,opts){
   // catches up.
   if (!opts || !opts.skipRender) render();
 }
+
+// Month / Day / Year dropdowns for a date field, replacing the native
+// <input type="date"> (whose segment-typing was glitchy — a mistyped year
+// jumped to year 0002). `value` is 'yyyy-mm-dd' or ''.
+function dateSelect(field, value){
+  var y='',m='',d='';
+  if(value && /^\d{4}-\d{2}-\d{2}$/.test(value)){ var pr=value.split('-'); y=pr[0]; m=pr[1]; d=pr[2]; }
+  var MO=[['01','January'],['02','February'],['03','March'],['04','April'],['05','May'],['06','June'],['07','July'],['08','August'],['09','September'],['10','October'],['11','November'],['12','December']];
+  function opt(v,l,sel){return '<option value="'+v+'"'+(sel?' selected':'')+'>'+l+'</option>';}
+  var mOpts='<option value="">Month</option>'+MO.map(function(o){return opt(o[0],o[1],m===o[0]);}).join('');
+  var dOpts='<option value="">Day</option>'; for(var i=1;i<=31;i++){var dd=(i<10?'0':'')+i; dOpts+=opt(dd,String(i),d===dd);}
+  var yOpts='<option value="">Year</option>'; for(var yr=2025;yr<=2030;yr++){yOpts+=opt(String(yr),String(yr),y===String(yr));}
+  return '<div style="display:flex;gap:6px">'+
+    '<select class="ainp" style="flex:2" data-datepart="'+field+'|m">'+mOpts+'</select>'+
+    '<select class="ainp" style="flex:1" data-datepart="'+field+'|d">'+dOpts+'</select>'+
+    '<select class="ainp" style="flex:1.3" data-datepart="'+field+'|y">'+yOpts+'</select>'+
+  '</div>';
+}
+// Recombine the three date dropdowns into 'yyyy-mm-dd' (only when all three are
+// picked) and persist. We intentionally do NOT re-render, so partial selections
+// stay put while the user is still choosing.
+function handleDatePart(el){
+  var field=el.dataset.datepart.split('|')[0];
+  function pv(part){var s=document.querySelector('[data-datepart="'+field+'|'+part+'"]');return s?s.value:'';}
+  var y=pv('y'), m=pv('m'), d=pv('d');
+  var combined=(y&&m&&d)?(y+'-'+m+'-'+d):'';
+  var s=currentStudent();
+  if(s&&s.pd){
+    s.pd[field]=combined;
+    s.pathway=calcPathway(s.pd);
+    s.profileScore=calcProfileScore(s.pd);
+  }
+  queueProgramSave();
+}
 function setRadio(el) {
   var field = el.dataset.field;
   var val = el.dataset.val;
@@ -3628,7 +3666,7 @@ function rAdmJobForm(){
   } : { jobRoles:[], hobbies:[], envs:[] };
 
   var SEAS=['winter','spring','summer','fall','year-round'];
-  var ENVS=[['mountain','&#127956;&#65039; Mountain'],['coastal','&#127754; Coastal'],['ocean','&#128026; Ocean'],['lake','&#128246; Lake'],['ski-area','&#127935; Ski area'],['national-park','&#127794; National park / rural'],['small-town','&#127960;&#65039; Small town'],['city','&#127750; City']];
+  var ENVS=[['mountain','&#127956;&#65039; Mountain'],['coastal','&#127754; Coastal'],['ocean','&#128026; Ocean'],['lake','&#128758; Lake'],['ski-area','&#127935; Ski area'],['national-park','&#127794; National park / rural'],['small-town','&#127960;&#65039; Small town'],['city','&#127750; City']];
   var SAVS=[['low','Low ($0–2k)'],['mid','Mid ($2–4k)'],['high','High ($4k+)']];
   // Mirror the role + hobby options participants choose from in rMatchIntake
   // so matching has any chance of overlapping.
