@@ -2167,6 +2167,15 @@ function rLiveMatch(p,pathway){
   }).sort(function(a,b){return b.avg-a.avg;});
 
   var top=scored[0];
+  // No jobs in the DB yet (e.g. a fresh project before any listings are added).
+  // Show the pathway + an empty state instead of crashing on scored[0].
+  if(!top){
+    var pwOnly=pathway||calcPathway(p);
+    return '<div class="card" style="text-align:center;padding:2rem;color:var(--mu);font-size:12px">'+
+      (pwOnly?'<div class="pathway-badge" style="margin-bottom:12px">&#127919; '+pwOnly+'</div>':'')+
+      '<div style="font-size:28px;margin-bottom:10px">&#9968;</div>'+
+      'Your profile is taking shape. New opportunities will appear here as they\'re added.</div>';
+  }
   var topC=mColor(top.score.overall);
   var pw=pathway||calcPathway(p);
 
