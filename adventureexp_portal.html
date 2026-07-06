@@ -919,6 +919,9 @@ async function logout() {
   currentUser = null;
   authMode = "login";
   signupPhoto = null;
+  // Clear any in-progress date-part selections so they can't bleed into the
+  // next user's profile form on this tab.
+  _dateParts = {};
   // Reset role to student so the next login is not stuck in admin view.
   role = "student";
   render();
@@ -3163,9 +3166,15 @@ function upPD(field,val,opts){
 // Month / Day / Year dropdowns for a date field, replacing the native
 // <input type="date"> (whose segment-typing was glitchy — a mistyped year
 // jumped to year 0002). `value` is 'yyyy-mm-dd' or ''.
+// Transient cache of partially-picked date parts, keyed by field. A partial
+// date (e.g. month chosen but not day/year) can't be stored as 'yyyy-mm-dd',
+// so without this a debounced save + re-render would wipe the in-progress
+// selection. We keep the raw parts here so dateSelect() can restore them.
+var _dateParts = {};
 function dateSelect(field, value){
   var y='',m='',d='';
   if(value && /^\d{4}-\d{2}-\d{2}$/.test(value)){ var pr=value.split('-'); y=pr[0]; m=pr[1]; d=pr[2]; }
+  else if(_dateParts[field]){ y=_dateParts[field].y||''; m=_dateParts[field].m||''; d=_dateParts[field].d||''; }
   var MO=[['01','January'],['02','February'],['03','March'],['04','April'],['05','May'],['06','June'],['07','July'],['08','August'],['09','September'],['10','October'],['11','November'],['12','December']];
   function opt(v,l,sel){return '<option value="'+v+'"'+(sel?' selected':'')+'>'+l+'</option>';}
   var mOpts='<option value="">Month</option>'+MO.map(function(o){return opt(o[0],o[1],m===o[0]);}).join('');
@@ -3184,6 +3193,9 @@ function handleDatePart(el){
   var field=el.dataset.datepart.split('|')[0];
   function pv(part){var s=document.querySelector('[data-datepart="'+field+'|'+part+'"]');return s?s.value:'';}
   var y=pv('y'), m=pv('m'), d=pv('d');
+  // Remember the raw parts so a re-render (from the debounced save) can restore
+  // a partial selection that can't yet be stored as a full 'yyyy-mm-dd' date.
+  _dateParts[field]={y:y,m:m,d:d};
   var combined=(y&&m&&d)?(y+'-'+m+'-'+d):'';
   var s=currentStudent();
   if(s&&s.pd){
