@@ -14,3 +14,7 @@
 supabase/.temp/
 config.bat
 node_modules
+
+# Build output / deploy artifacts
+dist/
+adventureexp-deploy.zip

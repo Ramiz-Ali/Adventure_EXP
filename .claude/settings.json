@@ -3,7 +3,8 @@
     "allow": [
       "Bash(node -e \"console.log\\('current 128246 =', String.fromCodePoint\\(128246\\)\\); console.log\\('canoe 128758 =', String.fromCodePoint\\(128758\\)\\);\")",
       "Bash(perl -pi -e 's/&#128246;/&#128758;/g' adventureexp_portal.html)",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "Bash(node -e 'const fs=require\\(\"fs\"\\);let c=fs.readFileSync\\(\"lib/db.js\",\"utf8\"\\).replace\\(/^\\\\s*import .*$/gm,\"\"\\).replace\\(/export /g,\"\"\\);try{new \\(require\\(\"vm\"\\).Script\\)\\(c\\);console.log\\(\"db.js: parse OK\"\\);}catch\\(e\\){console.log\\(\"ERR: \"+e.message\\);}')"
     ]
   }
 }
