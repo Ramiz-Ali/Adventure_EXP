@@ -158,6 +158,7 @@ function gotoFor(eventType: string, role: string): string {
     case "new_message":                       return role === "admin" ? "applications" : "messages";
     case "employer_verification_request":     return "employers";    // admin
     case "incomplete_profile_reminder":       return "students";     // admin
+    case "match_profile_completed":           return "students";     // admin
     default:                                  return "";
   }
 }
@@ -328,6 +329,18 @@ function renderTemplate(eventType: string, p: Record<string, any>, firstName: st
           "View participant",
           ctaUrl,
           `${p.participant_name || "A participant"} has an incomplete profile`,
+        ),
+      };
+    case "match_profile_completed":
+      return {
+        subject: `${p.participant_name || "A participant"} completed their match profile`,
+        html: shell(
+          `Match profile completed`,
+          firstName,
+          `<p style="margin:0"><strong>${escapeHtml(p.participant_name || "A participant")}</strong> just completed their match profile${p.pathway ? ` — pathway <strong>${escapeHtml(p.pathway)}</strong>` : ""}${typeof p.profile_score === "number" ? ` (${p.profile_score}% filled)` : ""}. Open the admin panel to review their program profile and match results.</p>`,
+          "View participant",
+          ctaUrl,
+          `${p.participant_name || "A participant"} completed their match profile`,
         ),
       };
     default:

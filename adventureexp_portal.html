@@ -527,7 +527,7 @@ document.addEventListener('click',function(e){
     var a=t.dataset.action, id=t.dataset.id||null, id2=t.dataset.id2||null, val=t.dataset.val;
     if(a==='nav'){if(_pdDirty)flushProgramSave();studentView=val;detailJobId=null;render();}
     else if(a==='empnav'){empView=val;render();}
-    else if(a==='adminnav'){adminView=val;if(val!=='settings')window._adminNotifSettings=null;render();}
+    else if(a==='adminnav'){if(matchEditStuId!=null){flushProgramSave();matchEditStuId=null;}adminView=val;if(val!=='settings')window._adminNotifSettings=null;render();}
     else if(a==='detail'){detailJobId=id;render();}
     else if(a==='back'||a==='detailback'){detailJobId=null;render();}
     else if(a==='fav'){toggleFav(id);e.stopPropagation();}
@@ -570,6 +570,8 @@ document.addEventListener('click',function(e){
     else if(a==='delemp'){confirmDeleteEmp(id);}
     else if(a==='editstudent'){openAdminStudentEdit(id);}
     else if(a==='savestudent'){saveAdminStudent(id);}
+    else if(a==='admineditmatch'){openAdminMatchEdit(id);}
+    else if(a==='backadminmatch'){closeAdminMatchEdit();}
     else if(a==='chip'){toggleChip(t);}
     else if(a==='radio'){setRadio(t);}
     else if(a==='clrseason'){filterSeason=new Set();render();}
@@ -1402,6 +1404,8 @@ function myApps() {
 }
 function stars(n) { return "&#11088;".repeat(n) + "&#9734;".repeat(5-n); }
 function setRole(r){
+  // Leaving the admin Match-profile editor: flush pending edits, drop the target.
+  if(matchEditStuId!=null){flushProgramSave();matchEditStuId=null;if(adminView==='matchedit')adminView='students';}
   role=r;detailJobId=null;filterSeason=new Set();filterMonth=new Set();filterRegion=new Set();
   ['student','employer','admin'].forEach(function(x){
     document.getElementById('rsw-'+x).classList.toggle('on',x===r);
@@ -1512,6 +1516,7 @@ function notificationLabel(n) {
     }
     case 'employer_verification_request': return 'Verify employer — '+(p.employer_name||'');
     case 'incomplete_profile_reminder':   return safeName(p.participant_name, 'A participant')+' has an incomplete profile';
+    case 'match_profile_completed':       return '🎯 '+safeName(p.participant_name, 'A participant')+' completed their match profile'+(p.pathway?' — '+p.pathway:'');
     default: return n.event_type.replace(/_/g, ' ');
   }
 }
@@ -2308,6 +2313,7 @@ function rAdmin(){
   var nav='<div class="subnav">'+tabs.map(function(t){return '<button class="snav'+(adminView===t[0]?" on":"")+'" data-action="adminnav" data-val="'+t[0]+'">'+t[1]+'</button>';}).join("")+'</div>';
   if(adminView==='empform')return rAdmEmpForm();
   if(adminView==='jobform')return rAdmJobForm();
+  if(adminView==='matchedit')return rAdminMatchEdit();
   return nav+{overview:rAdmOv,students:rAdmStu,employers:rAdmEmp,applications:rAdmApp,reviews:rAdmReviews,settings:rAdmSettings}[adminView]();
 }
 function rAdmOv(){
@@ -2360,11 +2366,37 @@ function rAdmStu(){
       (s.notes?'<div style="font-size:11px;color:var(--or-dk);margin-top:6px;padding:4px 7px;background:var(--or-lt);border-radius:5px;font-weight:600">'+s.notes+'</div>':"")+
       '<div style="margin-top:9px;display:flex;gap:5px;flex-wrap:wrap">'+
         '<button class="btn btn-xs" data-action="editstudent" data-id="'+s.id+'">Edit</button>'+
+        '<button class="btn btn-xs" data-action="admineditmatch" data-id="'+s.id+'">&#127919; Match profile</button>'+
         '<button class="btn btn-xs btn-b" data-action="matchjobs" data-id="'+s.id+'">Match jobs</button>'+
         '<button class="btn btn-xs '+(s.visibility?"btn-d":"btn-a")+'" data-action="vis" data-id="'+s.id+'">'+(s.visibility?"Hide":"Show")+'</button>'+
         (s.profileScore<70?'<button class="btn btn-xs" style="background:var(--or-lt);border-color:var(--or);color:var(--or-dk)" data-action="flagincomplete" data-id="'+s.id+'">⚠ Flag incomplete</button>':"")+
       '</div></div>';
   }).join("");
+}
+// Admin-only full-screen editor for a participant's Match / Program Builder
+// profile. Reuses the participant's own rMatchIntake + rLiveMatch renderers;
+// matchEditStuId routes the form's autosave to this participant (see
+// pdStudent/pdUserId). RLS already lets admins write any program_profile row.
+function openAdminMatchEdit(sid){
+  matchEditStuId = sid;
+  adminView = 'matchedit';
+  render();
+}
+async function closeAdminMatchEdit(){
+  // Persist any pending edits before we clear the target so nothing is lost.
+  try { await flushProgramSave(); } catch(e) { console.error('flush on close failed', e); }
+  matchEditStuId = null;
+  adminView = 'students';
+  render();
+}
+function rAdminMatchEdit(){
+  var s = matchEditStuId != null ? S(matchEditStuId) : null;
+  if(!s){ matchEditStuId = null; adminView = 'students'; return rAdmStu(); }
+  var header = '<div class="card" style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'+
+    '<div><div style="font-family:Nunito,sans-serif;font-weight:800;font-size:15px">&#127919; '+s.name+' &mdash; Match profile</div>'+
+      '<div style="color:var(--mu);font-size:11px">Editing on behalf of the participant &middot; changes autosave</div></div>'+
+    '<button class="btn btn-xs" data-action="backadminmatch">&#8592; Back to participants</button></div>';
+  return header + rMatchIntake(s.pd);
 }
 function rAdmEmp(){
   return '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div class="shd" style="margin:0">Employers ('+employers.length+')</div><div style="display:flex;gap:7px"><button class="btn btn-xs btn-b" data-action="addjob" data-id="0">+ Add job</button><button class="btn btn-p btn-xs" data-action="addemp">+ Add employer</button></div></div>'+
@@ -3123,6 +3155,25 @@ function rAdmSettings(){
 var _pdPending = null;
 var _pdTimer = null;
 var _pdDirty = false; // true when there are local edits not yet persisted
+
+// When an admin is editing a participant's Match profile on their behalf, this
+// holds that participant's id. null = the logged-in participant is editing their
+// own profile. pdStudent()/pdUserId() resolve which student the match-form
+// mutation handlers (radio/chip/upd/date) and the debounced save target.
+var matchEditStuId = null;
+function pdStudent(){ return matchEditStuId != null ? S(matchEditStuId) : currentStudent(); }
+function pdUserId(){ return matchEditStuId != null ? matchEditStuId : (currentUser ? currentUser.id : null); }
+
+// A participant's Match profile counts as "complete" once every non-optional
+// question is answered (passport/car/avoid-text/success-text are optional, so
+// they're excluded). Used to email the team once, the first time it fills in.
+function isMatchComplete(pd){
+  if(!pd) return false;
+  var req=["startDate","endDate","minDuration","flex","license","priority","recImportance","finGoal","savings","income","altOpen","mindset"];
+  for(var i=0;i<req.length;i++){ if(!pd[req[i]]) return false; }
+  return !!(pd.roles&&pd.roles.length) && !!(pd.envs&&pd.envs.length) && !!(pd.hobbies&&pd.hobbies.length);
+}
+
 function queueProgramSave() {
   if (!currentUser) return;
   _pdDirty = true;
@@ -3137,15 +3188,29 @@ function queueProgramSave() {
 async function flushProgramSave() {
   if (_pdTimer) { clearTimeout(_pdTimer); _pdTimer = null; }
   if (!_pdDirty || !currentUser) return;
-  var s = currentStudent();
-  if (!s || !s.pd) { _pdDirty = false; return; }
+  var s = pdStudent();
+  var uid = pdUserId();
+  if (!s || !s.pd || !uid) { _pdDirty = false; return; }
   var snapshot = Object.assign({}, s.pd);
+  var editingOwn = (matchEditStuId == null); // false when an admin edits a participant
   _pdDirty = false;
   try {
-    await window.DB.saveProgramProfile(currentUser.id, snapshot);
-    var fresh = await window.Auth.fetchProfile(currentUser.id);
+    await window.DB.saveProgramProfile(uid, snapshot);
+    var fresh = await window.Auth.fetchProfile(uid);
     s.profileScore = fresh.profile_score || 0;
     s.pathway = fresh.pathway || '';
+    // Email the team the first time a participant completes their OWN match
+    // profile. Admin edits (matchEditStuId set) never trigger the email.
+    if (editingOwn && currentUser.role !== 'admin' && isMatchComplete(snapshot) && !s.pd.completedAt) {
+      s.pd.completedAt = new Date().toISOString(); // mark locally so we only try once per session
+      // Stamp completed_at server-side. A DB trigger (migration 0012) fans the
+      // 'match_profile_completed' notification out to every admin, which the
+      // send-notification webhook then emails. Participants can't insert those
+      // notification rows themselves (RLS: notifications_insert_admin), so the
+      // trigger owns that step — the client only sets the timestamp.
+      try { await window.DB.markProgramComplete(uid); }
+      catch(ne) { console.error('markProgramComplete failed', ne); s.pd.completedAt = ''; }
+    }
     render();
   } catch(e) {
     console.error('save program profile failed', e);
@@ -3155,7 +3220,7 @@ async function flushProgramSave() {
 
 function upPD(field,val,opts){
   if(field==="filterCPI"){filterCPI=val;render();return;}
-  var s=currentStudent();
+  var s=pdStudent();
   if(s&&s.pd){
     s.pd[field]=val;
     s.pathway=calcPathway(s.pd);
@@ -3204,7 +3269,7 @@ function handleDatePart(el){
   // a partial selection that can't yet be stored as a full 'yyyy-mm-dd' date.
   _dateParts[field]={y:y,m:m,d:d};
   var combined=(y&&m&&d)?(y+'-'+m+'-'+d):'';
-  var s=currentStudent();
+  var s=pdStudent();
   if(s&&s.pd){
     s.pd[field]=combined;
     s.pathway=calcPathway(s.pd);
@@ -3224,7 +3289,7 @@ function setRadio(el) {
     return;
   }
   // Student profile radios
-  var s = currentStudent();
+  var s = pdStudent();
   if(s && s.pd) {
     s.pd[field] = val;
     s.pathway = calcPathway(s.pd);
@@ -3251,7 +3316,7 @@ function toggleChip(el) {
     return;
   }
   // Student profile chips
-  var s = currentStudent();
+  var s = pdStudent();
   if(!s||!s.pd) return;
   var arr = s.pd[field]||[];
   if(arr.includes(val)){
