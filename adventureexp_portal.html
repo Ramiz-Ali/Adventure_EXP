@@ -2366,7 +2366,7 @@ function rAdmStu(){
       (s.notes?'<div style="font-size:11px;color:var(--or-dk);margin-top:6px;padding:4px 7px;background:var(--or-lt);border-radius:5px;font-weight:600">'+s.notes+'</div>':"")+
       '<div style="margin-top:9px;display:flex;gap:5px;flex-wrap:wrap">'+
         '<button class="btn btn-xs" data-action="editstudent" data-id="'+s.id+'">Edit</button>'+
-        '<button class="btn btn-xs" data-action="admineditmatch" data-id="'+s.id+'">&#127919; Match profile</button>'+
+        '<button class="btn btn-xs" data-action="admineditmatch" data-id="'+s.id+'">Match profile</button>'+
         '<button class="btn btn-xs btn-b" data-action="matchjobs" data-id="'+s.id+'">Match jobs</button>'+
         '<button class="btn btn-xs '+(s.visibility?"btn-d":"btn-a")+'" data-action="vis" data-id="'+s.id+'">'+(s.visibility?"Hide":"Show")+'</button>'+
         (s.profileScore<70?'<button class="btn btn-xs" style="background:var(--or-lt);border-color:var(--or);color:var(--or-dk)" data-action="flagincomplete" data-id="'+s.id+'">⚠ Flag incomplete</button>':"")+
@@ -2393,7 +2393,7 @@ function rAdminMatchEdit(){
   var s = matchEditStuId != null ? S(matchEditStuId) : null;
   if(!s){ matchEditStuId = null; adminView = 'students'; return rAdmStu(); }
   var header = '<div class="card" style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'+
-    '<div><div style="font-family:Nunito,sans-serif;font-weight:800;font-size:15px">&#127919; '+s.name+' &mdash; Match profile</div>'+
+    '<div><div style="font-family:Nunito,sans-serif;font-weight:800;font-size:15px">'+s.name+' &mdash; Match profile</div>'+
       '<div style="color:var(--mu);font-size:11px">Editing on behalf of the participant &middot; changes autosave</div></div>'+
     '<button class="btn btn-xs" data-action="backadminmatch">&#8592; Back to participants</button></div>';
   return header + rMatchIntake(s.pd);
