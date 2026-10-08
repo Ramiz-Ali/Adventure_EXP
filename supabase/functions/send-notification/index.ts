@@ -154,11 +154,14 @@ function gotoFor(eventType: string, role: string): string {
     case "application_interviewing":
     case "application_offered":
     case "application_placed":
+    case "application_on-program":
+    case "application_complete":
     case "application_withdrawn":             return "applications"; // participant → Applied
     case "new_message":                       return role === "admin" ? "applications" : "messages";
     case "employer_verification_request":     return "employers";    // admin
     case "incomplete_profile_reminder":       return "students";     // admin
     case "match_profile_completed":           return "students";     // admin
+    case "coordinator_match":                 return "dashboard";    // participant
     default:                                  return "";
   }
 }
@@ -278,6 +281,30 @@ function renderTemplate(eventType: string, p: Record<string, any>, firstName: st
           `You're placed at ${p.employer_name || "AdventureEXP"}`,
         ),
       };
+    case "application_on-program":
+      return {
+        subject: `You've started your program — ${p.job_title || ""}`,
+        html: shell(
+          `You're on program!`,
+          firstName,
+          `<p style="margin:0">Your role as ${role(p.job_title)}${at} is now marked <strong>On Program</strong>. Enjoy the experience — reach out to your coordinator any time you need support.</p>`,
+          "Open portal",
+          ctaUrl,
+          `You're on program — ${p.job_title || ""}`,
+        ),
+      };
+    case "application_complete":
+      return {
+        subject: `🎉 Your program is complete — ${p.job_title || ""}`,
+        html: shell(
+          `Your program is complete!`,
+          firstName,
+          `<p style="margin:0 0 12px">Your role as ${role(p.job_title)}${at} is now marked <strong>Complete</strong>.</p><p style="margin:0">Congratulations on finishing your rotation — thank you for being part of AdventureEXP.</p>`,
+          "Open portal",
+          ctaUrl,
+          `Your program is complete — ${p.job_title || ""}`,
+        ),
+      };
     case "application_withdrawn":
       return {
         subject: `Application withdrawn — ${p.job_title || ""}`,
@@ -329,6 +356,18 @@ function renderTemplate(eventType: string, p: Record<string, any>, firstName: st
           "View participant",
           ctaUrl,
           `${p.participant_name || "A participant"} has an incomplete profile`,
+        ),
+      };
+    case "coordinator_match":
+      return {
+        subject: `Your coordinator matched you with a position`,
+        html: shell(
+          `Your coordinator has a match for you`,
+          firstName,
+          `<p style="margin:0">Your coordinator matched you with ${role(p.job_title)}${p.employer_name ? ` at <strong>${escapeHtml(p.employer_name)}</strong>` : ""}. Open your dashboard to take a look — if it feels right, you can request an interview from there.</p>`,
+          "View match",
+          ctaUrl,
+          `Your coordinator matched you with ${p.job_title || "a position"}`,
         ),
       };
     case "match_profile_completed":
