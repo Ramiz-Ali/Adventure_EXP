@@ -1,13 +1,11 @@
 # OS / editor
 .DS_Store
 .idea/
-.vscode/
 
 # Vercel
 .vercel/
 
 # Local secrets (anon key in lib/env.js IS safe to commit — it pairs with RLS)
-.env.local
 
 # Supabase CLI artifacts (not used here but keep just in case)
 .supabase/

@@ -399,15 +399,43 @@ select.ainp{padding-right:30px}
   <div id="main"></div>
   <div id="modal-root"></div>
 </div>
+<style>
+/* Rich-text job description: editor toolbar + rendered output (v2 M1 1.10) */
+.rt-tb{display:flex;gap:4px;margin-bottom:5px;flex-wrap:wrap}
+.rt-b{border:1px solid var(--brd);background:var(--sur);border-radius:6px;padding:3px 9px;font-size:12px;line-height:1.2;cursor:pointer;color:var(--tx)}
+.rt-b:hover{background:var(--or-lt);border-color:var(--or)}
+.rt-edit{min-height:100px;overflow:auto}
+.rt-edit:focus{outline:none;border-color:var(--or)}
+.rt-edit:empty:before{content:attr(data-ph);color:var(--mu)}
+.rt ul,.rt ol,.rt-edit ul,.rt-edit ol{margin:6px 0 6px 24px;padding:0}
+.rt li,.rt-edit li{margin:3px 0}
+.rt ul,.rt-edit ul{list-style:disc}
+.rt ol,.rt-edit ol{list-style:decimal}
+.rt p,.rt-edit p{margin:0 0 8px}
+.rt p:last-child,.rt-edit p:last-child{margin-bottom:0}
+/* Make bold clearly distinct from the muted body text */
+.rt b,.rt strong,.rt-edit b,.rt-edit strong{font-weight:800;color:var(--tx)}
+.rt i,.rt em,.rt-edit i,.rt-edit em{font-style:italic;color:var(--tx)}
+.rt u,.rt-edit u{text-decoration:underline;text-underline-offset:2px;color:var(--tx)}
+/* Applications status filter — custom dropdown that opens downward below the button */
+.appf-dd{position:relative}
+.appf-dd>summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap}
+.appf-dd>summary::-webkit-details-marker{display:none}
+.appf-menu{position:absolute;top:calc(100% + 4px);left:0;z-index:60;background:var(--sur);border:1px solid var(--brd);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);min-width:190px;padding:4px;max-height:280px;overflow:auto}
+.appf-menu>div{padding:8px 10px;border-radius:6px;font-size:13px;cursor:pointer;color:var(--tx)}
+.appf-menu>div:hover{background:var(--or-lt)}
+.appf-menu>div.on{font-weight:700;color:var(--or-dk);background:var(--or-lt)}
+</style>
 <script type="module">
-  import { sb } from './lib/supabase.js?v=6';
-  import { ENV } from './lib/env.js?v=6';
-  import * as Auth from './lib/auth.js?v=6';
-  import * as Upload from './lib/upload.js?v=6';
-  import * as DB from './lib/db.js?v=6';
-  import * as Match from './lib/matching.js?v=6';
-  import * as Notify from './lib/notify.js?v=6';
-  Object.assign(window, { sb, ENV, Auth, Upload, DB, Match, Notify });
+  import { sb } from './lib/supabase.js?v=14';
+  import { ENV } from './lib/env.js?v=14';
+  import * as Auth from './lib/auth.js?v=14';
+  import * as Upload from './lib/upload.js?v=14';
+  import * as DB from './lib/db.js?v=14';
+  import * as Match from './lib/matching.js?v=14';
+  import * as Notify from './lib/notify.js?v=14';
+  import * as Sanitize from './lib/sanitize.js?v=14';
+  Object.assign(window, { sb, ENV, Auth, Upload, DB, Match, Notify, Sanitize });
   window.__SB_READY__ = true;
   window.dispatchEvent(new Event('sb-ready'));
 </script>
@@ -426,8 +454,15 @@ var INDS=["hospitality","outdoor rec","trades","agriculture","marine","ranch","r
 var SEAS=["winter","spring","summer","fall","year-round"];
 var MONS=["January","February","March","April","May","June","July","August","September","October","November","December"];
 var REGS=["Alaska","California","Colorado","Hawaii","Idaho","Montana","Nevada","Oregon","Utah","Washington","Wyoming","Other"];
-var STATS=["applied","interviewing","offered","placed","withdrawn"];
-var STC={applied:"bb",interviewing:"ba",offered:"bt",placed:"bt",withdrawn:"bg"};
+var STATS=["requested","applied","interviewing","offered","placed","on-program","complete","withdrawn"];
+var STC={requested:"bp",applied:"bb",interviewing:"ba",offered:"bt",placed:"bt","on-program":"bt",complete:"bb",withdrawn:"bg"};
+// Statuses that mean the participant currently holds a role, so interview requests
+// are paused (v2 M2 finalization). A coordinator can override per-participant.
+var HOLD_STATUSES=["placed","on-program","complete"];
+// Human labels for statuses (v2 M1 1.2). "requested" = a participant's interview
+// request — distinct from the legacy "applied". stBdg() renders the labelled badge.
+var STL={requested:"Requested interview",applied:"Applied",interviewing:"Interviewing",offered:"Offered",placed:"Placed","on-program":"On Program",complete:"Complete",withdrawn:"Withdrawn"};
+function stBdg(s){return bdg(STL[s]||s,STC[s]);}
 var IC={hospitality:"bb","outdoor rec":"bt",trades:"ba",agriculture:"bt",marine:"bb",ranch:"ba",resort:"bt",retail:"bp",other:"bg"};
 var ACTS=["Skiing","Hiking","Surfing","Water sports","Rock climbing","Horseback riding","Fishing","Mountain biking","Social scene"];
 // Shared taxonomies — used by BOTH the admin job form and the participant Match
@@ -458,6 +493,7 @@ var detailJobId=null;
 var filterSeason=new Set(), filterMonth=new Set(), filterRegion=new Set(), filterActivity=new Set();
 var filterCPI="", filterNow=false, searchQ="";
 var currentUser=null, authMode="login", signupPhoto=null;
+var loginNotice=null; // admin-toggled login-page banner (v2 M3)
 var photoStore={};
 window._pTab="info";
 
@@ -468,13 +504,28 @@ let jobs = [];
 let students = [];
 let apps = [];
 let allApps = [];
+let coordMatches = []; // coordinator-flagged job matches (v2 M2 2.2)
+let manualPlacements = []; // off-portal placements recorded by admin (v2 M2 3.4)
 
 
 // ── HELPERS ──────────────────────────────────────────────────────────────
 function E(id){return employers.find(function(e){return e.id===id;});}
 function J(id){return jobs.find(function(j){return j.id===id;});}
 // Job status pill class: open=green, filling=yellow, filled/closed=red.
-function jSp(status){return status==='open'?'sp-o':status==='filling'?'sp-y':'sp-f';}
+// Job status model (v2 M3 1.4). Legacy values (open/filling/filled/closed) are
+// normalized on the fly so the UI is correct before AND after the window data
+// migration converts the stored values.
+var JOB_STATUSES=['posted','accepting','filling','filled'];
+var JOBSTL={posted:'Posted',accepting:'Accepting interviews',filling:'Spots filling',filled:'Filled'};
+function jobStatusKey(s){s=(s||'').toString().toLowerCase();if(s==='open')return'accepting';if(s==='closed')return'filled';if(s==='posted'||s==='accepting'||s==='filling'||s==='filled')return s;return'accepting';}
+function jobStatusLabel(s){return JOBSTL[jobStatusKey(s)]||'Accepting interviews';}
+function jobIsOpen(s){return jobStatusKey(s)!=='filled';} // accepting interview requests
+function jSp(status){var k=jobStatusKey(status);return k==='filled'?'sp-f':k==='filling'?'sp-y':'sp-o';}
+// US state → 2-letter abbreviation (v2 M1 feedback: show "| WY" not "mountain").
+var US_STATES={alabama:'AL',alaska:'AK',arizona:'AZ',arkansas:'AR',california:'CA',colorado:'CO',connecticut:'CT',delaware:'DE',florida:'FL',georgia:'GA',hawaii:'HI',idaho:'ID',illinois:'IL',indiana:'IN',iowa:'IA',kansas:'KS',kentucky:'KY',louisiana:'LA',maine:'ME',maryland:'MD',massachusetts:'MA',michigan:'MI',minnesota:'MN',mississippi:'MS',missouri:'MO',montana:'MT',nebraska:'NE',nevada:'NV','new hampshire':'NH','new jersey':'NJ','new mexico':'NM','new york':'NY','north carolina':'NC','north dakota':'ND',ohio:'OH',oklahoma:'OK',oregon:'OR',pennsylvania:'PA','rhode island':'RI','south carolina':'SC','south dakota':'SD',tennessee:'TN',texas:'TX',utah:'UT',vermont:'VT',virginia:'VA',washington:'WA','west virginia':'WV',wisconsin:'WI',wyoming:'WY','district of columbia':'DC'};
+function stateAbbr(s){s=(s||'').toString().trim();if(!s)return'';if(s.length===2)return s.toUpperCase();return US_STATES[s.toLowerCase()]||s;}
+// Display a stored ISO date (yyyy-mm-dd) in US format MM/DD/YYYY (v2 M2 feedback 3).
+function usDate(d){if(!d)return'';var p=String(d).slice(0,10).split('-');if(p.length!==3)return d;return p[1]+'/'+p[2]+'/'+p[0];}
 function S(id){
   var found=students.find(function(s){return s.id===id;});
   if(found){if(!(found.favorites instanceof Set))found.favorites=new Set(found.favorites||[]);return found;}
@@ -548,10 +599,15 @@ document.addEventListener('click',function(e){
     else if(a==='empdecline'){withButtonLoading(t,function(){return updateAppAll(id,'withdrawn');});}
     else if(a==='empoffer'){withButtonLoading(t,function(){return updateAppAll(id,'offered');});}
     else if(a==='setstatus'){withButtonLoading(t,function(){return updateAppAll(id,val);});}
+    else if(a==='remapp'){withButtonLoading(t,function(){return adminRemoveApp(id);});}
+    else if(a==='unremapp'){withButtonLoading(t,function(){return adminRestoreApp(id);});}
+    else if(a==='toggleremoved'){window._appFilter=window._appFilter||{status:'all',q:'',showRemoved:false};window._appFilter.showRemoved=!window._appFilter.showRemoved;render();}
+    else if(a==='appstatusset'){window._appFilter=window._appFilter||{status:'all',q:'',showRemoved:false};window._appFilter.status=val;render();}
     else if(a==='vis'){withButtonLoading(t,function(){return toggleVis(id);});}
     else if(a==='verify'){withButtonLoading(t,function(){return verifyEmp(id);});}
     else if(a==='matchjobs'){openMatchModal(id);}
     else if(a==='adminplace'){withButtonLoading(t,function(){return adminPlace(id,id2);});}
+    else if(a==='coordmatch'){withButtonLoading(t,function(){return coordMatch(id,id2);});}
     else if(a==='editprofile'){openEditProfile();}
     else if(a==='saveprofile'){withButtonLoading(t,function(){return saveProfile();});}
     else if(a==='addemp'){adminEmpFormId=0;adminView='empform';render();}
@@ -570,6 +626,11 @@ document.addEventListener('click',function(e){
     else if(a==='delemp'){confirmDeleteEmp(id);}
     else if(a==='editstudent'){openAdminStudentEdit(id);}
     else if(a==='savestudent'){saveAdminStudent(id);}
+    else if(a==='recordplacement'){openManualPlacement(id);}
+    else if(a==='editplacement'){openManualPlacement(id2,id);}
+    else if(a==='dlphoto'){withButtonLoading(t,function(){return downloadParticipantPhoto(id);});}
+    else if(a==='savemplacement'){saveManualPlacement(id,id2);}
+    else if(a==='delplacement'){withButtonLoading(t,function(){return delManualPlacement(id);});}
     else if(a==='admineditmatch'){openAdminMatchEdit(id);}
     else if(a==='backadminmatch'){closeAdminMatchEdit();}
     else if(a==='chip'){toggleChip(t);}
@@ -598,6 +659,7 @@ document.addEventListener('click',function(e){
     else if(a==='openaddreview'){adminView='reviews';render();}
     else if(a==='flagincomplete'){withButtonLoading(t,function(){return flagIncompleteProfile(id);});}
     else if(a==='savenotifsettings'){withButtonLoading(t,function(){return saveNotifSettings();});}
+    else if(a==='savelognotice'){withButtonLoading(t,function(){return saveLoginNotice();});}
     else if(a==='togglehidden'){adminShowHidden=!adminShowHidden;render();}
     else if(a==='rmphoto'){e.stopPropagation();e.preventDefault();withButtonLoading(t,function(){return removeEmpPhoto(id);});}
     else if(a==='approvestudent'){approveStudentById(id);}
@@ -629,7 +691,23 @@ document.addEventListener('input',function(e){
     return;
   }
   var s=e.target.closest('[data-search]');
-  if(s){searchQ=s.value;render();return;}
+  if(s){
+    // render() rebuilds #main, destroying this input — restore focus + caret
+    // on the fresh one so typing/deleting continues uninterrupted.
+    var selS=s.selectionStart, selE=s.selectionEnd;
+    searchQ=s.value;render();
+    var ns=document.getElementById('sq');
+    if(ns){ns.focus();try{ns.setSelectionRange(selS,selE);}catch(_){}}
+    return;
+  }
+  var afq=e.target.closest('[data-appfilter]'); // Applications page name search
+  if(afq && afq.dataset.appfilter==='q'){
+    window._appFilter=window._appFilter||{status:'all',q:'',showRemoved:false};
+    var q0=afq.selectionStart,q1=afq.selectionEnd;
+    window._appFilter.q=afq.value; render();
+    var nq=document.getElementById('appf-q'); if(nq){nq.focus();try{nq.setSelectionRange(q0,q1);}catch(_){}}
+    return;
+  }
   var sw=e.target.closest('[data-strength]');
   if(sw){updateStrength();return;}
   var ph=e.target.closest('[data-photo]');
@@ -640,6 +718,11 @@ document.addEventListener('input',function(e){
 document.addEventListener('change',function(e){
   var dp=e.target.closest('[data-datepart]');
   if(dp){handleDatePart(dp);return;}
+  var afs=e.target.closest('[data-appfilter]'); // Applications page status filter
+  if(afs && afs.dataset.appfilter==='status'){
+    window._appFilter=window._appFilter||{status:'all',q:'',showRemoved:false};
+    window._appFilter.status=afs.value; render(); return;
+  }
   var u=e.target.closest('[data-upd]');
   if(u){upPD(u.dataset.upd,u.value);return;}
   var ph=e.target.closest('[data-photo]');
@@ -821,7 +904,7 @@ function legacyUser(profile) {
 async function hydrateAndRender() {
   if (currentUser) {
     try {
-      await window.DB.hydrateAll({ currentUser, employers, jobs, students, apps, allApps, notifications, reviews });
+      await window.DB.hydrateAll({ currentUser, employers, jobs, students, apps, allApps, notifications, reviews, coordMatches, manualPlacements });
     } catch (e) { console.error('hydrate failed', e); }
     subscribeRealtime();
   }
@@ -884,7 +967,7 @@ function subscribeRealtime() {
         // unsaved selections.
         try {
           await flushProgramSave();
-          await window.DB.hydrateAll({ currentUser, employers, jobs, students, apps, allApps, notifications, reviews });
+          await window.DB.hydrateAll({ currentUser, employers, jobs, students, apps, allApps, notifications, reviews, coordMatches, manualPlacements });
           render();
         } catch(_) {}
       }
@@ -894,7 +977,7 @@ function subscribeRealtime() {
       async function() {
         try {
           await flushProgramSave();
-          await window.DB.hydrateAll({ currentUser, employers, jobs, students, apps, allApps, notifications, reviews });
+          await window.DB.hydrateAll({ currentUser, employers, jobs, students, apps, allApps, notifications, reviews, coordMatches, manualPlacements });
           render();
         } catch(_) {}
       }
@@ -962,7 +1045,14 @@ function renderAuth() {
   else if (authMode === "forgot-password") inner = renderForgotPassword();
   else if (authMode === "set-new-password") inner = renderSetNewPassword();
   else inner = renderLoginForm();
-  return '<div class="auth-wrap"><div class="auth-card">'+inner+'</div></div>';
+  // Admin-toggled login-page notice (v2 M3). Text is escaped; newlines -> <br>.
+  var notice = '';
+  if (loginNotice && loginNotice.login_notice_enabled && loginNotice.login_notice_text) {
+    var t = loginNotice.login_notice_text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+    notice = '<div style="margin:0 0 12px;background:var(--or-lt);border:1px solid var(--or);color:var(--or-dk);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.5;font-weight:600;text-align:center">'+t+'</div>';
+  }
+  // Stack the notice directly above the card (auth-wrap centers a single column).
+  return '<div class="auth-wrap"><div style="width:100%;max-width:480px;display:flex;flex-direction:column">'+notice+'<div class="auth-card">'+inner+'</div></div></div>';
 }
 function renderLoginForm() {
   var logoSrc = '';
@@ -1173,15 +1263,31 @@ async function doForgot() {
     return;
   }
   await withSubmitLoading('doforgot', async function(){
+    // Client requirement: only send a reset link if the account exists; otherwise
+    // tell the user to create an account first. The existence check runs through
+    // the email_exists RPC (server-side; anon RLS can't read other profiles).
+    var exists = true;
+    try {
+      exists = await window.Auth.emailExists(email);
+    } catch (e) {
+      // If the check itself fails, fall back to attempting the reset so a backend
+      // hiccup never blocks a legitimate user.
+      console.error('emailExists check failed', e);
+      exists = true;
+    }
+    if (!exists) {
+      var freshErr = document.getElementById("fp-err");
+      if (freshErr) freshErr.innerHTML = 'No AdventureEXP account was found for <strong>'+email+'</strong>. Please <a data-authmode="signup" style="cursor:pointer;font-weight:700;text-decoration:underline">create an account</a> first.';
+      return;
+    }
     try {
       await window.Auth.requestPasswordReset(email);
     } catch (e) {
-      // Don't leak whether the account exists — always show generic success.
       console.error('requestPasswordReset failed', e);
     }
     var freshOk = document.getElementById("fp-success");
     if (freshOk) {
-      freshOk.innerHTML = '&#9989; If an account with <strong>'+email+'</strong> exists, a reset link is on its way. Check your inbox (and spam folder).';
+      freshOk.innerHTML = '&#9989; A reset link is on its way to <strong>'+email+'</strong>. Check your inbox (and spam folder).';
       freshOk.style.display = "block";
     }
     var freshEmailEl = document.getElementById("fp-email");
@@ -1447,6 +1553,35 @@ function consumePendingGoto(){
     detailJobId = null;
   }
 }
+// Normalize a job description for the editor + display (v2 M1 1.10). HTML from
+// the new editor is sanitized as-is; legacy plain text (with \n breaks) is
+// converted to real <p>/<br> so it renders cleanly without white-space hacks.
+function richHtml(desc){
+  desc = (desc==null?'':String(desc));
+  // Already structured HTML from the editor (has block tags) → use as-is.
+  if(/<(p|div|ul|ol|br)\b/i.test(desc)){
+    return window.Sanitize ? window.Sanitize.sanitizeHtml(desc) : desc;
+  }
+  // Otherwise it's text whose line breaks live in raw \n (HTML would collapse
+  // them). Rebuild paragraphs/<br>. Escape < > only when there's no inline
+  // markup to preserve (b/i/u/em/strong from a legacy save).
+  var hasInline = /<(b|strong|i|em|u)\b/i.test(desc);
+  var text = hasInline ? desc : desc.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  var html = text.split(/\n{2,}/).map(function(p){
+    p = p.trim();
+    return p ? '<p>'+p.replace(/\n/g,'<br>')+'</p>' : '';
+  }).join('');
+  return window.Sanitize ? window.Sanitize.sanitizeHtml(html) : html;
+}
+// Rich-text toolbar (v2 M1 1.10): apply the formatting command while preserving
+// the contenteditable's selection. mousedown + preventDefault stops the button
+// from stealing focus, so execCommand acts on the current selection.
+document.addEventListener('mousedown', function(e){
+  var btn = e.target.closest ? e.target.closest('[data-rtcmd]') : null;
+  if(!btn) return;
+  e.preventDefault();
+  try { document.execCommand(btn.getAttribute('data-rtcmd'), false, null); } catch(_){}
+});
 function render(){
   if (!isLoggedIn()) {
     document.getElementById("main").innerHTML = renderAuth();
@@ -1507,6 +1642,8 @@ function notificationLabel(n) {
     case 'application_interviewing': return '📅 Interview started — '+(p.job_title||'');
     case 'application_offered':    return '🎉 Offer received — '+(p.job_title||'');
     case 'application_placed':     return '✨ You\'re placed at '+(p.employer_name||'');
+    case 'application_on-program': return '🏔️ You\'re on program — '+(p.job_title||'');
+    case 'application_complete':   return '🎉 Program complete — '+(p.job_title||'');
     case 'application_withdrawn':  return 'Application withdrawn — '+(p.job_title||'');
     case 'new_message': {
       // For participants viewing: admin → "Your coordinator"
@@ -1517,6 +1654,7 @@ function notificationLabel(n) {
     case 'employer_verification_request': return 'Verify employer — '+(p.employer_name||'');
     case 'incomplete_profile_reminder':   return safeName(p.participant_name, 'A participant')+' has an incomplete profile';
     case 'match_profile_completed':       return '🎯 '+safeName(p.participant_name, 'A participant')+' completed their match profile'+(p.pathway?' — '+p.pathway:'');
+    case 'coordinator_match':             return '🎯 Your coordinator matched you with <strong>'+(p.job_title||'a position')+'</strong>';
     default: return n.event_type.replace(/_/g, ' ');
   }
 }
@@ -1649,6 +1787,16 @@ function updateTopbarUser(){
   if(um) um.innerHTML = renderUserMenu();
 }
 function rStudent(){
+  // Suspended participant (v2 M3 3.2) — no portal access; show a notice only.
+  // RLS also denies their data, so nothing loads even if this were bypassed.
+  var _su=currentStudent();
+  if(_su && _su.suspended && !(currentUser && currentUser.role==='admin')){
+    return '<div class="card" style="max-width:520px;margin:48px auto;text-align:center;padding:32px">'+
+      '<div style="font-size:34px;margin-bottom:8px">&#128274;</div>'+
+      '<div style="font-family:Nunito,sans-serif;font-weight:800;font-size:17px;margin-bottom:6px">Your portal access has been restricted by the administrator</div>'+
+      '<p style="font-size:13px;color:var(--mu);line-height:1.6">Your account has been temporarily suspended. Please contact your AdventureEXP coordinator if you need assistance.</p>'+
+    '</div>';
+  }
   if(detailJobId)return rJobDetail(detailJobId);
   var tabs=[["dashboard","Dashboard"],["discover","Discover"],["listings","Job Listings"],["applications","Applied"],["profile","My Profile"],["messages","Messages"]];
   var uc=apps.filter(function(a){return a.status==="offered";}).length;
@@ -1663,7 +1811,7 @@ function rDashboard(){
   var s=currentStudent();
   var p=s.pd;
   var oc=myApps().filter(function(a){return a.status==="offered";}).length;
-  var openJobs=jobs.filter(function(j){return j.status==="open"&&!j.archived;}).length;
+  var openJobs=jobs.filter(function(j){return jobIsOpen(j.status)&&!j.archived;}).length;
   var hp=(p.roles&&p.roles.length>0)||(p.envs&&p.envs.length>0)||(p.hobbies&&p.hobbies.length>0)||!!p.startDate;
   var pathway=s.pathway||calcPathway(p);
 
@@ -1678,6 +1826,27 @@ function rDashboard(){
   html+='<div style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);border-radius:9px;padding:8px 12px;font-size:11px;color:rgba(255,255,255,.9);max-width:200px"><strong style="color:var(--or);display:block;margin-bottom:2px">Explore your matches</strong>Start with one opportunity and decide if it feels right.</div>';
   html+='<div style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);border-radius:9px;padding:8px 12px;font-size:11px;color:rgba(255,255,255,.9);max-width:200px"><strong style="color:var(--or);display:block;margin-bottom:2px">Questions?</strong>Reach out to your coordinator any time.</div>';
   html+='</div></div></div>';
+
+  // ── COORDINATOR MATCH CARD (v2 M2 2.2) ──
+  // Show a match only until the participant acts on it — once they've requested/
+  // applied for that job, the card's job is done and it drops off. (The match row
+  // stays in the DB as a record for the admin.)
+  var myMatches=coordMatches.filter(function(m){
+    return m.participantId===s.id && !myApps().some(function(a){return a.jobId===m.jobId;});
+  });
+  if(myMatches.length){
+    html+='<div class="card" style="border:1px solid var(--or);background:var(--or-lt);margin-bottom:16px">';
+    html+='<div style="font-family:Nunito,sans-serif;font-weight:800;font-size:14px;color:var(--or-dk);margin-bottom:3px">&#127919; Your coordinator matched you with '+(myMatches.length>1?myMatches.length+' positions':'a position')+'</div>';
+    html+='<div style="font-size:12px;color:var(--tx);margin-bottom:6px">Take a look and request an interview if it feels right.</div>';
+    myMatches.forEach(function(m){
+      var mj=J(m.jobId); if(!mj) return;
+      var me=E(mj.empId);
+      html+='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid rgba(0,0,0,.06)">'+
+        '<div style="min-width:0"><div style="font-size:13px;font-weight:700">'+mj.title+'</div><div style="font-size:11px;color:var(--mu)">'+(me&&me.name||'')+(mj.season?' &middot; '+mj.season:'')+'</div></div>'+
+        '<button class="btn btn-xs btn-p" data-action="detail" data-id="'+mj.id+'" style="flex-shrink:0">View &amp; request &rarr;</button></div>';
+    });
+    html+='</div>';
+  }
 
   // ── STAT CARDS ──
   html+='<div class="stat-row">';
@@ -1717,8 +1886,13 @@ function rDashboard(){
       var j=J(a.jobId);var e=E(j&&j.empId);
       return '<div class="lr" style="cursor:default"><div class="el">'+empLogo(e)+'</div>'+
         '<div class="lb2"><div class="lt">'+(j&&j.title||'')+'</div><div class="le">'+(e&&e.name||'')+'</div></div>'+
-        bdg(a.status,STC[a.status])+'</div>';
+        stBdg(a.status)+'</div>';
     }).join('');
+    // Only the 3 most recent show here — link to the full list so the dashboard
+    // never understates how many they have (QA finding, v2 M2 round-2).
+    if(ma.length>3){
+      html+='<div style="text-align:center;margin-top:8px"><a data-action="nav" data-val="applications" style="cursor:pointer;font-size:12px;font-weight:700;color:var(--or-dk)">See all '+ma.length+' applications &rarr;</a></div>';
+    }
   }
 
   return html;
@@ -1747,10 +1921,10 @@ function rDiscover(){
         '<div style="display:flex;gap:4px;margin-top:5px;flex-wrap:wrap">'+
         CATL.map(function(lbl,i){return '<div style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--mu)"><span>'+lbl+'</span><div style="width:24px;height:3px;background:var(--brd);border-radius:2px;overflow:hidden"><div style="height:100%;width:'+j.score.cats[i]+'%;background:'+CATC[i]+'"></div></div></div>';}).join("")+
         '</div>'+
-        (ap?'<div style="margin-top:5px">'+bdg(ap.status,STC[ap.status])+'</div>':"")+
+        (ap?'<div style="margin-top:5px">'+stBdg(ap.status)+'</div>':"")+
         (av?'<div style="margin-top:5px">'+bdg("avoided role","bc")+'</div>':"")+'</div>'+
       '<div style="display:flex;flex-direction:column;align-items:center;gap:7px">'+
-        '<div class="sp '+jSp(j.status)+'">'+j.status.toUpperCase()+'</div>'+
+        '<div class="sp '+jSp(j.status)+'">'+jobStatusLabel(j.status)+'</div>'+
         '<button class="fb'+(s.favorites.has(j.id)?" on":"")+'" data-action="fav" data-id="'+j.id+'">'+(s.favorites.has(j.id)?"★":"☆")+'</button>'+
       '</div></div>';
   });
@@ -1785,8 +1959,8 @@ function rListings(){
     '</div>'+
     '</div>';
   var backNav='<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px"><button class="bkb" data-action="nav" data-val="dashboard" style="margin-bottom:0">&#8592; Dashboard</button><span style="font-size:13px;font-weight:700;font-family:Nunito,sans-serif;color:var(--tx)">&#128196; Job Listings</span></div>';
-  var lst='<div>'+backNav+'<div class="sb"><input type="text" placeholder="Search jobs..." id="sq" value="'+searchQ+'" data-search="1"></div>'+
-    '<div style="font-size:12px;color:var(--mu);margin-bottom:10px;font-weight:600">'+fj.length+' jobs · <span style="color:var(--op)">'+fj.filter(function(j){return j.status==="open";}).length+' OPEN</span></div>'+
+  var lst='<div>'+backNav+'<div class="sb"><input type="text" placeholder="Search jobs..." id="sq" value="'+escHtml(searchQ)+'" data-search="1"></div>'+
+    '<div style="font-size:12px;color:var(--mu);margin-bottom:10px;font-weight:600">'+fj.length+' jobs · <span style="color:var(--op)">'+fj.filter(function(j){return jobIsOpen(j.status);}).length+' OPEN</span></div>'+
     fj.map(function(j){
       var e=E(j.empId);var ap=MA(j.id);
   return '<div class="lr" data-action="detail" data-id="'+j.id+'">'+
@@ -1796,9 +1970,9 @@ function rListings(){
           '<div class="le">@ '+(e&&e.name||"")+' · '+(e&&e.region||"")+'</div>'+
           '<div class="lm"><span>'+j.season+' · '+j.startMonth+'</span><span>'+j.salaryDisplay+'</span><span>'+j.duration+'</span></div>'+
           '<div style="display:flex;flex-wrap:wrap;gap:2px;margin-bottom:4px">'+(j.perks||[]).slice(0,3).map(function(p){return '<span class="perk">'+p+'</span>';}).join("")+'</div>'+
-          (ap?'<div style="margin-top:4px">'+bdg(ap.status,STC[ap.status])+'</div>':"")+'</div>'+
+          (ap?'<div style="margin-top:4px">'+stBdg(ap.status)+'</div>':"")+'</div>'+
         '<div style="display:flex;flex-direction:column;align-items:center;gap:7px">'+
-          '<div class="sp '+jSp(j.status)+'">'+j.status.toUpperCase()+'</div>'+
+          '<div class="sp '+jSp(j.status)+'">'+jobStatusLabel(j.status)+'</div>'+
           '<button class="fb'+(s.favorites.has(j.id)?" on":"")+'" data-action="fav" data-id="'+j.id+'">'+(s.favorites.has(j.id)?"★":"☆")+'</button>'+
         '</div></div>';
     }).join("")+'</div>';
@@ -1813,7 +1987,7 @@ function filteredJobs(){
     if(filterRegion.size&&!(e&&filterRegion.has(e.state)))return false;
     if(filterActivity.size){var hasAct=(j.hobbies||[]).some(function(a){return filterActivity.has(a);});if(!hasAct)return false;}
     if(filterCPI){var minCpi=parseFloat(filterCPI)||0;if(j.cpi<minCpi)return false;}
-    if(filterNow&&j.status!=="open")return false;
+    if(filterNow&&!jobIsOpen(j.status))return false;
     if(searchQ&&!j.title.toLowerCase().includes(searchQ.toLowerCase())&&!(e&&e.name.toLowerCase().includes(searchQ.toLowerCase())))return false;
     return true;
   });
@@ -1864,7 +2038,7 @@ function rJobDetail(jid){
         '<div style="color:var(--bl-dk);font-size:12px;font-weight:700;margin-bottom:2px">@ '+(e&&e.name||"")+'</div>'+
         '<div style="font-size:11px;color:var(--mu)">📍 '+(e&&e.region||"")+'</div>'+
         '<div style="margin-top:6px;display:flex;gap:7px;flex-wrap:wrap;align-items:center">'+
-          '<div class="sp '+jSp(j.status)+'">'+j.status.toUpperCase()+'</div>'+
+          '<div class="sp '+jSp(j.status)+'">'+jobStatusLabel(j.status)+'</div>'+
           '<span style="font-size:11px;color:var(--mu)">'+(j.filled||0)+' placed'+(j.slots?' of '+j.slots:'')+'</span>'+
         '</div>'+
       '</div>'+
@@ -1906,9 +2080,9 @@ function rJobDetail(jid){
     '</div>'+
     // ---- Position information ----
     '<div class="dv"></div><div class="shd">Position information</div>'+
-    para('Position description', j.description)+
-    para('Position qualifications', j.requirements)+
-    (function(){var f=[];if(j.age21)f.push('21+');if(j.requiresLicense)f.push('Requires driver license');if(j.requiresPassport)f.push('Requires passport');if(j.isTipped)f.push('Tipped position');return f.length?'<div class="tr">'+f.map(function(x){return bdg('&#10003; '+x,'bt');}).join('')+'</div>':'';})()+
+    '<span class="fl">Position description</span><div class="rt" style="font-size:12px;color:var(--mu);line-height:1.7;margin:3px 0 10px">'+(richHtml(j.description)||'&mdash;')+'</div>'+
+    '<span class="fl">Position qualifications</span><div class="rt" style="font-size:12px;color:var(--mu);line-height:1.7;margin:3px 0 10px">'+(richHtml(j.requirements)||'&mdash;')+'</div>'+
+    (function(){var f=[];if(j.age21)f.push('21+');if(j.requiresLicense)f.push('Requires driver license');if(j.requiresPassport)f.push('Requires passport');if(j.requiresVehicle)f.push('Requires a vehicle');if(j.isTipped)f.push('Tipped position');return f.length?'<div class="tr">'+f.map(function(x){return bdg('&#10003; '+x,'bt');}).join('')+'</div>':'';})()+
     // ---- Housing ----
     '<div class="dv"></div><div class="shd">Housing</div>'+
     (er.housing_desc?'<p style="font-size:12px;color:var(--mu);line-height:1.7;margin-bottom:10px">'+er.housing_desc+'</p>':'')+
@@ -1945,13 +2119,30 @@ function rJobDetail(jid){
       CATL.map(function(lbl,i){return '<div style="background:var(--bg);border:1px solid var(--brd);border-radius:7px;padding:5px;text-align:center"><div style="font-size:8px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">'+lbl+'</div><div style="font-size:13px;font-weight:700;color:'+CATC[i]+'">'+sc.cats[i]+'%</div></div>';}).join("")+
       '</div></div>':"")+'<div class="ai">✦ AI match explanation — coming soon</div></div>';
   var main = main + reviewsHtml;
+  // Interview-request cap (v2 M2 2.4 + finalization): at most 2 active ('requested')
+  // at once, and none while the participant holds a role (Placed / On Program /
+  // Complete, or an off-portal placement) UNLESS a coordinator has opened their
+  // account. Mirrors the DB trigger so the button reflects the rule.
+  var onHold = myApps().some(function(a){return HOLD_STATUSES.indexOf(a.status)>=0;}) || (currentUser && manualPlacements.some(function(m){return m.participantId===currentUser.id;}));
+  var activeReq = myApps().filter(function(a){return a.status==='requested';}).length;
+  var cs = currentStudent()||{};
+  var reqsBlocked = !!cs.requestsBlocked;          // v2 M3 3.2 — coordinator block
+  var reqsOpened  = !!cs.requestsOpened;           // v2 M2 finalization — coordinator override
+  var reqBtn;
+  if(reqsBlocked || (onHold && !reqsOpened)){
+    reqBtn='<button class="rb" disabled>Interview Unavailable</button><div style="font-size:11px;color:var(--mu);text-align:center;margin-top:4px">You have accepted a role through AdventureEXP and are not eligible to interview for your next rotation yet.</div>';
+  } else if(activeReq>=2){
+    reqBtn='<button class="rb" disabled>REQUEST LIMIT REACHED</button><div style="font-size:11px;color:var(--mu);text-align:center;margin-top:4px">You have 2 open interview requests. One must be accepted, declined, or withdrawn before requesting another.</div>';
+  } else {
+    reqBtn='<button class="rb" data-action="apply" data-id="'+j.id+'">REQUEST INTERVIEW</button><div style="font-size:11px;color:var(--mu);text-align:center">'+(j.filled||0)+' placed'+(j.slots?' of '+j.slots:'')+'</div>';
+  }
   var side='<div><div class="sc2">'+
-    (ap?'<div style="margin-bottom:8px">'+bdg("Status: "+ap.status,STC[ap.status])+'</div><button class="btn btn-b btn-xs" style="width:100%;margin-top:4px" data-action="thread" data-id="'+ap.id+'">View messages</button>':
-    j.status==="open"?'<button class="rb" data-action="apply" data-id="'+j.id+'">REQUEST INTERVIEW</button><div style="font-size:11px;color:var(--mu);text-align:center">'+(j.filled||0)+' placed'+(j.slots?' of '+j.slots:'')+'</div>':
+    (ap?'<div style="margin-bottom:8px">'+bdg("Status: "+(STL[ap.status]||ap.status),STC[ap.status])+'</div><button class="btn btn-b btn-xs" style="width:100%;margin-top:4px" data-action="thread" data-id="'+ap.id+'">View messages</button>':
+    jobIsOpen(j.status)?reqBtn:
     '<button class="rb" disabled>POSITION FILLED</button>')+
     '</div>'+
     (more.length?'<div class="sc2"><div style="font-size:11px;font-family:Nunito,sans-serif;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">More from '+(e&&e.name||"")+'</div>'+
-    more.map(function(mj){return '<div class="mj" data-action="detail" data-id="'+mj.id+'">'+mj.title+' <span class="sp '+jSp(mj.status)+'" style="font-size:9px;padding:2px 6px">'+mj.status.toUpperCase()+'</span></div>';}).join("")+'</div>':"")+'</div>';
+    more.map(function(mj){return '<div class="mj" data-action="detail" data-id="'+mj.id+'">'+mj.title+' <span class="sp '+jSp(mj.status)+'" style="font-size:9px;padding:2px 6px">'+jobStatusLabel(mj.status)+'</span></div>';}).join("")+'</div>':"")+'</div>';
   // Wrap `main` in a single container so the .dw grid sees exactly TWO
   // children (main column + side column). The back button sits ABOVE the
   // grid so the job card and the action card on the right start at the
@@ -1963,6 +2154,20 @@ async function reqInterview(jid) {
   if (!currentUser) return;
   if (MA(jid)) {
     showModal('<h3>Already requested</h3><p style="font-size:13px;color:var(--mu)">You already have an application for this position.</p><div class="mf2"><button class="btn btn-p btn-xs" data-action="closemod">OK</button></div>');
+    return;
+  }
+  // Portal access + hold rules (v2 M3 3.2 + M2 finalization). Also enforced by RLS
+  // and the DB trigger; these are friendly pre-checks so the participant sees the
+  // reason before the request. A coordinator override (requestsOpened) re-opens a
+  // held participant.
+  var cs0 = currentStudent()||{};
+  var heldNow = myApps().some(function(a){return HOLD_STATUSES.indexOf(a.status)>=0;}) || (currentUser && manualPlacements.some(function(m){return m.participantId===currentUser.id;}));
+  if (cs0.requestsBlocked || (heldNow && !cs0.requestsOpened)) {
+    showAlert({type:'info',title:'Interview Unavailable',body:'You have accepted a role through AdventureEXP and are not eligible to interview for your next rotation yet.'});
+    return;
+  }
+  if (myApps().filter(function(a){return a.status==='requested';}).length >= 2) {
+    showAlert({type:'info',title:'Request limit reached',body:'You can have at most 2 open interview requests. One must be accepted, declined, or withdrawn before requesting another.'});
     return;
   }
   try {
@@ -1977,6 +2182,12 @@ async function reqInterview(jid) {
   } catch(e) {
     if (e.code === '23505') {
       showModal('<h3>Already requested</h3><p>You already applied to this job.</p><div class="mf2"><button class="btn btn-p btn-xs" data-action="closemod">OK</button></div>');
+      return;
+    }
+    // DB cap trigger raises P0001 with a readable message (v2 M2 2.4).
+    if (e.code === 'P0001' || (e.message && /interview request|already placed/i.test(e.message))) {
+      showAlert({type:'info',title:'Cannot request',body:e.message||'Request not allowed right now.'});
+      await hydrateAndRender();
       return;
     }
     console.error('reqInterview failed', e);
@@ -2004,12 +2215,12 @@ function rApplied(){
           '<div class="el" style="width:38px;height:38px;font-size:20px">'+empLogo(e)+'</div>'+
           '<div><div style="font-family:Nunito,sans-serif;font-weight:700">'+(j&&j.title||"")+'</div>'+
           '<div style="color:var(--bl-dk);font-size:11px;font-weight:600">'+(e&&e.name||"")+'</div></div>'+
-        '</div>'+bdg(a.status,STC[a.status])+'</div>'+
+        '</div>'+stBdg(a.status)+'</div>'+
       '<div style="font-size:11px;color:var(--mu);margin-top:6px">'+(j&&j.season||"")+' · '+(j&&j.startMonth||"")+' · '+(j&&j.duration||"")+'</div>'+
       '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">'+
         '<button class="btn btn-b btn-xs" data-action="thread" data-id="'+a.id+'">Messages ('+(a.messageCount!=null?a.messageCount:a.messages.length)+')</button>'+
         (a.status==="offered"?'<button class="btn btn-a btn-xs" data-action="accept" data-id="'+a.id+'">Accept</button><button class="btn btn-d btn-xs" data-action="decline" data-id="'+a.id+'">Decline</button>':"")+
-        (a.status==="placed"||a.status==="interviewing"||a.status==="offered"?'<button class="btn btn-xs" style="background:var(--or-lt);border-color:var(--or);color:var(--or-dk)" data-action="openrev" data-id="'+(j&&j.id||0)+'">⭐ Leave review</button>':"")+
+        (a.status==="placed"||a.status==="interviewing"||a.status==="offered"||a.status==="on-program"||a.status==="complete"?'<button class="btn btn-xs" style="background:var(--or-lt);border-color:var(--or);color:var(--or-dk)" data-action="openrev" data-id="'+(j&&j.id||0)+'">⭐ Leave review</button>':"")+
       '</div></div>';
   }).join("");
 }
@@ -2044,9 +2255,13 @@ function rProfile(){
 }
 function rMatchIntake(p) {
   function radio(field, opts) {
+    // Legacy savings answers (0-2k/2-4k/4-6k/6k+) map to the new bands for
+    // display only, so a pre-migration answer still shows as selected (v2 M3 1.5).
+    var SAVMAP={'0-2k':'1-3k','2-4k':'3-4k','4-6k':'4k+','6k+':'4k+'};
+    var cur = (field==='savings' && SAVMAP[p[field]]) ? SAVMAP[p[field]] : p[field];
     return '<div class="radio-group">' + opts.map(function(o) {
       var val = o[0], lbl = o[1];
-      var on = p[field] === val;
+      var on = cur === val;
       return '<div class="radio-opt' + (on?" on":"") + '" data-action="radio" data-field="' + field + '" data-val="' + val + '">' +
         '<div class="rdot"><div class="rdot-inner"></div></div><span>' + lbl + '</span></div>';
     }).join("") + '</div>';
@@ -2119,7 +2334,7 @@ function rMatchIntake(p) {
     '<div style="margin-bottom:12px"><label class="ql">4.1 Primary financial goal?</label>' +
       radio("finGoal",[["save","Save as much as possible"],["break-even","Break even and gain experience"],["earn-lifestyle","Earn money while prioritizing lifestyle"]]) + '</div>' +
     '<div style="margin-bottom:12px"><label class="ql">4.2 Ideal savings by end of program?</label>' +
-      radio("savings",[["0-2k","$0 &#8211; $2,000"],["2-4k","$2,000 &#8211; $4,000"],["4-6k","$4,000 &#8211; $6,000"],["6k+","$6,000+"],["not-sure","Not sure yet"]]) + '</div>' +
+      radio("savings",[["0-1k","$0 &#8211; $1,000"],["1-3k","$1,000 &#8211; $3,000"],["3-4k","$3,000 &#8211; $4,000"],["4k+","$4,000+"],["not-sure","Not sure yet"]]) + '</div>' +
     '<div style="margin-bottom:12px"><label class="ql">4.3 Income preference?</label>' +
       radio("income",[["guaranteed","Guaranteed hours and predictable income"],["tips","Potential for higher earnings (tipped positions)"]]) + '</div>' +
 
@@ -2151,8 +2366,10 @@ function rLiveMatch(p,pathway){
 
   if(filled<1) return '<div class="card" style="text-align:center;padding:2rem;color:var(--mu);font-size:12px"><div style="font-size:28px;margin-bottom:10px">&#9968;</div>Answer a few questions to see your profile take shape</div>';
 
-  // Score all jobs
-  var scored=jobs.filter(function(j){return !j.archived;}).map(function(j){return Object.assign({},j,{score:scoreJob(j,p)});}).sort(function(a,b){return b.score.overall-a.score.overall;});
+  // Score all jobs. Exclude archived AND filled listings — a filled job is no
+  // longer an opportunity, so it must not appear in the ranked list or the job-
+  // type summary (Adam's M2 round-2 feedback 1).
+  var scored=jobs.filter(function(j){return !j.archived && jobIsOpen(j.status);}).map(function(j){return Object.assign({},j,{score:scoreJob(j,p)});}).sort(function(a,b){return b.score.overall-a.score.overall;});
 
   // Summarise which JOB TYPES match best (not individual listings)
   var typeMap={};
@@ -2206,17 +2423,20 @@ function rLiveMatch(p,pathway){
   html+='</div>';
 
   // Job type rankings
-  html+='<div style="font-size:10px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Job types ranked by fit</div>';
-  typeArr.forEach(function(t){
-    var c2=mColor(t.avg);
-    html+='<div class="card" style="margin-bottom:7px;padding:10px 12px">';
-    html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
-    html+='<div><div style="font-size:13px;font-weight:800;font-family:Nunito,sans-serif">'+t.type+'</div>';
-    html+='<div style="font-size:10px;color:var(--mu)">'+t.count+' position'+(t.count!==1?'s':'')+' &nbsp;&#183;&nbsp; '+t.envList+'</div></div>';
-    html+='<div style="display:flex;flex-direction:column;align-items:center;background:var(--bg);border:1px solid var(--brd);border-radius:6px;padding:3px 9px;min-width:48px">';
-    html+='<span style="font-size:15px;font-weight:900;font-family:Nunito,sans-serif;color:'+c2+'">'+t.avg+'%</span>';
-    html+='<span style="font-size:8px;color:var(--mu);font-weight:600;text-transform:uppercase;letter-spacing:.04em">avg match</span></div></div>';
-    html+='<div style="height:5px;background:var(--brd);border-radius:3px;overflow:hidden"><div style="height:100%;width:'+t.avg+'%;background:'+c2+';border-radius:3px;transition:width .4s"></div></div>';
+  // Individual jobs ranked by fit — each shows the employer and links to the
+  // actual listing (Adam's M1 feedback). Filled jobs drop to the bottom.
+  html+='<div style="font-size:10px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Jobs ranked by fit</div>';
+  scored.slice(0,12).forEach(function(j){
+    var c2=mColor(j.score.overall);
+    var emp=E(j.empId);
+    html+='<div class="card" style="margin-bottom:7px;padding:10px 12px;cursor:pointer" data-action="detail" data-id="'+j.id+'">';
+    html+='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">';
+    html+='<div style="min-width:0"><div style="font-size:13px;font-weight:800;font-family:Nunito,sans-serif">'+j.title+'</div>';
+    html+='<div style="font-size:10px;color:var(--mu)">'+(emp&&emp.name||'')+(emp&&stateAbbr(emp.state)?' &nbsp;|&nbsp; '+stateAbbr(emp.state):'')+'</div></div>';
+    html+='<div style="display:flex;flex-direction:column;align-items:center;background:var(--bg);border:1px solid var(--brd);border-radius:6px;padding:3px 9px;min-width:48px;flex-shrink:0">';
+    html+='<span style="font-size:15px;font-weight:900;font-family:Nunito,sans-serif;color:'+c2+'">'+j.score.overall+'%</span>';
+    html+='<span style="font-size:8px;color:var(--mu);font-weight:600;text-transform:uppercase;letter-spacing:.04em">match</span></div></div>';
+    html+='<div style="height:5px;background:var(--brd);border-radius:3px;overflow:hidden;margin-top:6px"><div style="height:100%;width:'+j.score.overall+'%;background:'+c2+';border-radius:3px;transition:width .4s"></div></div>';
     html+='</div>';
   });
 
@@ -2235,7 +2455,7 @@ function rMsgs(){
           '<div class="el" style="width:34px;height:34px;font-size:17px">'+empLogo(e)+'</div>'+
           '<div><div style="font-family:Nunito,sans-serif;font-weight:700;font-size:13px">'+(e&&e.name||"")+'</div>'+
           '<div style="color:var(--mu);font-size:11px">'+(j&&j.title||"")+'</div></div></div>'+
-        '<div style="text-align:right">'+bdg(a.status,STC[a.status])+'<div style="color:var(--mu);font-size:10px;margin-top:3px">'+(last&&last.ts||"")+'</div></div></div>'+
+        '<div style="text-align:right">'+stBdg(a.status)+'<div style="color:var(--mu);font-size:10px;margin-top:3px">'+(last&&last.ts||"")+'</div></div></div>'+
       '<div style="font-size:12px;color:var(--mu);margin-top:7px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">'+(last&&last.text||"")+'</div></div>';
   }).join("");
 }
@@ -2249,21 +2469,21 @@ function rEmpList(){
   return '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div><div class="shd" style="margin:0;margin-bottom:2px">'+mj.length+' positions</div><div style="font-size:11px;color:var(--mu)">'+e.name+'</div></div><button class="btn btn-p btn-xs" data-action="addjob" data-id="'+e.id+'">+ Add position</button></div>'+
   mj.map(function(j){
     return '<div class="lr" style="cursor:default"><div class="el">'+empLogo(e)+'</div><div class="lb2"><div class="lt">'+j.title+'</div><div class="lm"><span>'+j.season+' · '+j.startMonth+'</span><span>'+j.salaryDisplay+'</span><span>'+j.filled+'/'+j.slots+' filled</span></div><div class="tr">'+(j.perks||[]).slice(0,3).map(function(p){return bdg(p,"bt");}).join("")+'</div></div>'+
-      '<div style="display:flex;flex-direction:column;align-items:center;gap:7px"><div class="sp '+jSp(j.status)+'">'+j.status.toUpperCase()+'</div><button class="btn btn-xs" data-action="editjob" data-id="'+j.id+'">Edit</button></div></div>';
+      '<div style="display:flex;flex-direction:column;align-items:center;gap:7px"><div class="sp '+jSp(j.status)+'">'+jobStatusLabel(j.status)+'</div><button class="btn btn-xs" data-action="editjob" data-id="'+j.id+'">Edit</button></div></div>';
   }).join("");
 }
 function rEmpCand(){
   var e=currentEmployer();
-  var ma=allApps.filter(function(a){return jobs.find(function(j){return j.empId===e.id&&j.id===a.jobId;});});
+  var ma=allApps.filter(function(a){return !a.adminRemovedAt && jobs.find(function(j){return j.empId===e.id&&j.id===a.jobId;});});
   return '<div class="shd">'+ma.length+' Candidate application'+(ma.length!==1?'s':'')+'</div>'+
   ma.map(function(a){
     var s=S(a.studentId);var j=J(a.jobId);var p=s.pd;
     var sc=p&&(p.roles&&p.roles.length||p.envs&&p.envs.length)?scoreJob(j,p):null;
     return '<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start">'+
       '<div><div style="font-family:Nunito,sans-serif;font-weight:700">'+s.name+'</div><div style="color:var(--mu);font-size:11px">'+s.location+' to '+(j&&j.title||"")+'</div></div>'+
-      '<div style="text-align:right">'+bdg(a.status,STC[a.status])+(sc?'<div style="font-size:10px;color:'+mColor(sc.overall)+';margin-top:2px;font-weight:700">'+sc.overall+'% match</div>':"")+'</div></div>'+
+      '<div style="text-align:right">'+stBdg(a.status)+(sc?'<div style="font-size:10px;color:'+mColor(sc.overall)+';margin-top:2px;font-weight:700">'+sc.overall+'% match</div>':"")+'</div></div>'+
       '<div style="margin-top:8px;display:flex;gap:5px;flex-wrap:wrap">'+
-        (a.status==="applied"?'<button class="btn btn-a btn-xs" data-action="empaccept" data-id="'+a.id+'">Accept</button><button class="btn btn-d btn-xs" data-action="empdecline" data-id="'+a.id+'">Decline</button>':"")+
+        ((a.status==="applied"||a.status==="requested")?'<button class="btn btn-a btn-xs" data-action="empaccept" data-id="'+a.id+'">Accept</button><button class="btn btn-d btn-xs" data-action="empdecline" data-id="'+a.id+'">Decline</button>':"")+
         (a.status==="interviewing"?'<button class="btn btn-a btn-xs" data-action="empoffer" data-id="'+a.id+'">Offer</button>':"")+
         '<button class="btn btn-xs btn-b" data-action="athread" data-id="'+a.id+'">Message</button></div></div>';
   }).join("");
@@ -2297,7 +2517,7 @@ function rEmpProf(){
 }
 function rEmpMsgs(){
   var e=currentEmployer();
-  var ma=allApps.filter(function(a){return jobs.find(function(j){return j.empId===e.id&&j.id===a.jobId;});});
+  var ma=allApps.filter(function(a){return !a.adminRemovedAt && jobs.find(function(j){return j.empId===e.id&&j.id===a.jobId;});});
   return '<div class="shd">Message threads</div>'+
   ma.map(function(a){
     var s=S(a.studentId);var j=J(a.jobId);var last=a.messages[a.messages.length-1];
@@ -2305,7 +2525,7 @@ function rEmpMsgs(){
       '<div style="display:flex;justify-content:space-between"><div style="font-family:Nunito,sans-serif;font-weight:700">'+s.name+'</div><span style="color:var(--mu);font-size:10px">'+(last&&last.ts||"")+'</span></div>'+
       '<div style="color:var(--mu);font-size:11px">'+(j&&j.title||"")+'</div>'+
       '<div style="font-size:12px;color:var(--mu);margin-top:4px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">'+(last&&last.text||"No messages")+'</div>'+
-      bdg(a.status,STC[a.status])+'</div>';
+      stBdg(a.status)+'</div>';
   }).join("");
 }
 function rAdmin(){
@@ -2317,16 +2537,16 @@ function rAdmin(){
   return nav+{overview:rAdmOv,students:rAdmStu,employers:rAdmEmp,applications:rAdmApp,reviews:rAdmReviews,settings:rAdmSettings}[adminView]();
 }
 function rAdmOv(){
-  var op=jobs.filter(function(j){return j.status==="open";}).length;
-  var fi=jobs.filter(function(j){return j.status==="filled";}).length;
+  var op=jobs.filter(function(j){return jobIsOpen(j.status);}).length;
+  var fi=jobs.filter(function(j){return jobStatusKey(j.status)==='filled';}).length;
   // Hidden participants are removed from the admin's attention surface — the
   // overview counts only people who are visibility=true.
   var visStudents = students.filter(function(s){return s.visibility;});
   return '<div class="stat-row"><div class="sc"><div class="sc-n">'+visStudents.length+'</div><div class="sc-l">Students</div></div><div class="sc"><div class="sc-n">'+employers.length+'</div><div class="sc-l">Employers</div></div><div class="sc"><div class="sc-n" style="color:var(--op)">'+op+'</div><div class="sc-l">Open</div></div><div class="sc"><div class="sc-n" style="color:var(--fi)">'+fi+'</div><div class="sc-l">Filled</div></div></div>'+
   '<div class="c2" style="gap:12px"><div class="card"><div style="font-family:Nunito,sans-serif;font-weight:700;font-size:13px;margin-bottom:8px">By status</div>'+
-  STATS.map(function(st){var n=allApps.filter(function(a){return a.status===st;}).length;return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px solid var(--brd)">'+bdg(st,STC[st])+'<span style="font-weight:700">'+n+'</span></div>';}).join("")+'</div>'+
+  STATS.map(function(st){var n=allApps.filter(function(a){return a.status===st;}).length;return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px solid var(--brd)">'+bdg(STL[st]||st,STC[st])+'<span style="font-weight:700">'+n+'</span></div>';}).join("")+'</div>'+
   '<div class="card"><div style="font-family:Nunito,sans-serif;font-weight:700;font-size:13px;margin-bottom:8px">Pending actions</div>'+
-  '<div style="font-size:12px;padding:5px 0;border-bottom:1px solid var(--brd)">'+bdg(allApps.filter(function(a){return a.status==="applied";}).length+' new requests',"ba")+' awaiting</div>'+
+  '<div style="font-size:12px;padding:5px 0;border-bottom:1px solid var(--brd)">'+bdg(allApps.filter(function(a){return (a.status==="applied"||a.status==="requested") && !a.adminRemovedAt;}).length+' new requests',"ba")+' awaiting</div>'+
   '<div style="font-size:12px;padding:5px 0;border-bottom:1px solid var(--brd)">'+bdg(employers.filter(function(e){return !e.verified;}).length+' employers',"bc")+' need verification</div>'+
   '<div style="font-size:12px;padding:5px 0">'+bdg(visStudents.filter(function(s){return s.profileScore<70;}).length+' students',"ba")+' incomplete profiles</div></div></div>';
 }
@@ -2360,14 +2580,43 @@ function rAdmStu(){
   return header + visList.map(function(s){
     return '<div class="card"'+(!s.visibility?' style="opacity:.65"':'')+'><div style="display:flex;justify-content:space-between;align-items:flex-start">'+
       '<div><div style="font-family:Nunito,sans-serif;font-weight:700">'+s.name+'</div><div style="color:var(--mu);font-size:11px">'+(s.age!=null?'Age '+s.age:'Age —')+' · '+(s.location||'—')+' · Last login: '+fmtLastLogin(s.lastLogin)+'</div></div>'+
-      '<div>'+bdg(s.profileScore+'%',"bb")+'&nbsp;'+(s.visibility?bdg("visible","bt"):bdg("hidden","bg"))+'</div></div>'+
+      '<div>'+bdg(s.profileScore+'%',"bb")+'&nbsp;'+(s.visibility?bdg("visible","bt"):bdg("hidden","bg"))+(s.suspended?'&nbsp;'+bdg("&#128274; Suspended","bc"):'')+(s.requestsBlocked?'&nbsp;'+bdg("Requests blocked","ba"):'')+(s.requestsOpened?'&nbsp;'+bdg("Requests open (override)","bt"):'')+'</div></div>'+
       '<div class="prb" style="margin:6px 0"><div class="prf" style="width:'+s.profileScore+'%"></div></div>'+
       '<div class="tr">'+s.industries.map(function(i){return bdg(i,IC[i]||"bg");}).join("")+'</div>'+
+      // Interview availability the participant set (Adam's M1 feedback).
+      (function(){var times=(s.availTimes||[]).map(function(t){return t.charAt(0).toUpperCase()+t.slice(1);});var parts=[times.join(", "),(s.availDays||[]).join(", "),s.timezone&&s.timezone+" time"].filter(Boolean);return parts.length?'<div style="font-size:11px;color:var(--mu);margin-top:6px"><span style="font-weight:700;color:var(--tx)">Interview availability:</span> '+parts.join(" &middot; ")+'</div>':"";})()+
       (s.notes?'<div style="font-size:11px;color:var(--or-dk);margin-top:6px;padding:4px 7px;background:var(--or-lt);border-radius:5px;font-weight:600">'+s.notes+'</div>':"")+
+      // Starred roles the participant saved (v2 M1 1.1). Read-only; job titles
+      // resolved via J(). Empty when they haven't starred anything.
+      (function(){
+        var favs=(s.favorites instanceof Set)?s.favorites:new Set(s.favorites||[]);
+        if(!favs.size) return "";
+        var items=Array.from(favs).map(function(jid){var j=J(jid);return j?bdg("&#9733; "+j.title,"bb"):"";}).filter(Boolean).join("");
+        if(!items) return "";
+        return '<div style="margin-top:8px"><div class="fl" style="margin:0 0 3px">Starred roles ('+favs.size+')</div><div class="tr">'+items+'</div></div>';
+      })()+
+      // Off-portal placements recorded for this participant (v2 M2 3.4).
+      (function(){
+        var mps=manualPlacements.filter(function(m){return m.participantId===s.id;});
+        if(!mps.length) return "";
+        return '<div style="margin-top:8px"><div class="fl" style="margin:0 0 3px">Placement (off-portal)</div>'+
+          mps.map(function(m){
+            var dates=[usDate(m.startDate),usDate(m.endDate)].filter(Boolean).join(' &ndash; ');
+            return '<div style="font-size:11px;padding:5px 7px;background:var(--op-lt);color:var(--op);border-radius:5px;margin-bottom:3px">'+
+              '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px">'+
+                '<span style="font-weight:600">&#9989; '+m.employerName+(m.roleTitle?' &mdash; '+m.roleTitle:'')+(dates?' &middot; '+dates:'')+'</span>'+
+                '<span style="display:flex;gap:4px;flex-shrink:0"><button class="btn btn-xs" data-action="editplacement" data-id="'+m.id+'" data-id2="'+s.id+'">Edit</button><button class="btn btn-xs btn-d" data-action="delplacement" data-id="'+m.id+'">Remove</button></span>'+
+              '</div>'+
+              (m.notes?'<div style="margin-top:4px;color:var(--tx);font-weight:500;white-space:pre-wrap">'+m.notes+'</div>':'')+
+            '</div>';}).join("")+
+        '</div>';
+      })()+
       '<div style="margin-top:9px;display:flex;gap:5px;flex-wrap:wrap">'+
         '<button class="btn btn-xs" data-action="editstudent" data-id="'+s.id+'">Edit</button>'+
         '<button class="btn btn-xs" data-action="admineditmatch" data-id="'+s.id+'">Match profile</button>'+
         '<button class="btn btn-xs btn-b" data-action="matchjobs" data-id="'+s.id+'">Match jobs</button>'+
+        '<button class="btn btn-xs btn-a" data-action="recordplacement" data-id="'+s.id+'">Record placement</button>'+
+        (s.photo?'<button class="btn btn-xs" data-action="dlphoto" data-id="'+s.id+'">&#11015; Photo</button>':'')+
         '<button class="btn btn-xs '+(s.visibility?"btn-d":"btn-a")+'" data-action="vis" data-id="'+s.id+'">'+(s.visibility?"Hide":"Show")+'</button>'+
         (s.profileScore<70?'<button class="btn btn-xs" style="background:var(--or-lt);border-color:var(--or);color:var(--or-dk)" data-action="flagincomplete" data-id="'+s.id+'">⚠ Flag incomplete</button>':"")+
       '</div></div>';
@@ -2416,15 +2665,17 @@ function rAdmEmp(){
       // Per-employer job list with edit / duplicate / archive / delete
       (myJobs.length?'<div style="margin:-2px 0 10px 14px;padding-left:14px;border-left:2px solid var(--brd)">'+
         myJobs.map(function(j){
-          var stBtns=['open','filling','filled'].map(function(st){
-            var on=(j.status||'open')===st;
-            var col=st==='open'?'#2A9D6E':st==='filling'?'#C8941A':'#D9534F';
+          var curKey=jobStatusKey(j.status);
+          var JOBCOL={posted:'#2A9D6E',accepting:'#2A9D6E',filling:'#C8941A',filled:'#D9534F'};
+          var stBtns=JOB_STATUSES.map(function(st){
+            var on=curKey===st;
+            var col=JOBCOL[st];
             var style=on?('background:'+col+';color:#fff;border-color:'+col):'opacity:.55';
-            return '<button class="btn btn-xs" data-action="setjobstatus" data-id="'+j.id+'" data-val="'+st+'" style="'+style+'">'+st.charAt(0).toUpperCase()+st.slice(1)+'</button>';
+            return '<button class="btn btn-xs" data-action="setjobstatus" data-id="'+j.id+'" data-val="'+st+'" style="'+style+'">'+JOBSTL[st]+'</button>';
           }).join('');
           return '<div style="padding:6px 0;border-bottom:1px solid var(--brd)'+(j.archived?';opacity:.6':'')+'">'+
             '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'+
-            '<div style="min-width:0"><div style="font-size:12px;font-weight:600;font-family:Nunito,sans-serif;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+j.title+' '+(j.archived?bdg("Archived","bc"):'<span class="sp '+jSp(j.status)+'" style="font-size:9px;padding:2px 6px">'+(j.status||'').toUpperCase()+'</span>')+'</div><div style="font-size:10px;color:var(--mu)">'+j.season+' · '+j.startMonth+' · '+j.salaryDisplay+' · '+(j.filled||0)+' placed'+(j.slots?' / '+j.slots:'')+'</div></div>'+
+            '<div style="min-width:0"><div style="font-size:12px;font-weight:600;font-family:Nunito,sans-serif;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+j.title+' '+(j.archived?bdg("Archived","bc"):'<span class="sp '+jSp(j.status)+'" style="font-size:9px;padding:2px 6px">'+jobStatusLabel(j.status)+'</span>')+'</div><div style="font-size:10px;color:var(--mu)">'+j.season+' · '+j.startMonth+' · '+j.salaryDisplay+' · '+(j.filled||0)+' placed'+(j.slots?' / '+j.slots:'')+'</div></div>'+
             '<div style="display:flex;gap:4px;flex-shrink:0">'+
               '<button class="btn btn-xs" data-action="editjob" data-id="'+j.id+'">Edit</button>'+
               '<button class="btn btn-xs btn-b" data-action="dupjob" data-id="'+j.id+'">Duplicate</button>'+
@@ -2440,17 +2691,45 @@ function rAdmEmp(){
   }).join("");
 }
 function rAdmApp(){
-  return '<div class="shd">All applications ('+allApps.length+')</div>'+
-  allApps.map(function(a){
+  // Filters (Adam's M1 feedback): status, participant-name search, and hide
+  // removed by default to keep the page usable.
+  var f=window._appFilter=window._appFilter||{status:'all',q:'',showRemoved:false};
+  var removedCount=allApps.filter(function(a){return a.adminRemovedAt;}).length;
+  var list=allApps.filter(function(a){
+    if(!f.showRemoved && a.adminRemovedAt) return false;
+    if(f.status!=='all' && a.status!==f.status) return false;
+    if(f.q){ var st=S(a.studentId); if(((st&&st.name||'').toLowerCase()).indexOf(f.q.toLowerCase())<0) return false; }
+    return true;
+  });
+  var fbEl='height:36px;box-sizing:border-box;font-size:13px;margin:0';
+  var bar='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">'+
+    (function(){
+      var curLabel=f.status==='all'?'All statuses':(STL[f.status]||f.status);
+      var opts=[['all','All statuses']].concat(STATS.map(function(st){return [st,STL[st]||st];}));
+      return '<details class="appf-dd">'+
+        '<summary class="ainp" style="width:auto;min-width:150px;padding:4px 12px;'+fbEl+'">'+curLabel+' <span style="color:var(--mu);font-size:10px">&#9662;</span></summary>'+
+        '<div class="appf-menu">'+opts.map(function(o){return '<div data-action="appstatusset" data-val="'+o[0]+'"'+(f.status===o[0]?' class="on"':'')+'>'+o[1]+'</div>';}).join('')+'</div>'+
+      '</details>';
+    })()+
+    '<input class="ainp" id="appf-q" style="flex:1;min-width:170px;padding:4px 12px;'+fbEl+'" placeholder="Search by participant name…" value="'+((f.q||'').replace(/"/g,'&quot;'))+'" data-appfilter="q">'+
+    (removedCount?'<button class="btn" data-action="toggleremoved" style="padding:4px 12px;'+fbEl+'">'+(f.showRemoved?'Hide removed ('+removedCount+')':'Show removed ('+removedCount+')')+'</button>':'')+
+  '</div>';
+  var rows=list.length?list.map(function(a){
     var s=S(a.studentId);var j=J(a.jobId);var e=E(j&&j.empId);
     var p=s.pd;var sc=p&&(p.roles&&p.roles.length||p.envs&&p.envs.length)?scoreJob(j,p):null;
-    return '<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start">'+
+    var removed=!!a.adminRemovedAt;
+    return '<div class="card"'+(removed?' style="opacity:.6"':'')+'><div style="display:flex;justify-content:space-between;align-items:flex-start">'+
       '<div><div style="font-family:Nunito,sans-serif;font-weight:700">'+s.name+' to '+(j&&j.title||"")+'</div><div style="color:var(--mu);font-size:11px">'+(e&&e.name||"")+' · '+a.date+'</div></div>'+
-      '<div>'+bdg(a.status,STC[a.status])+(sc?'<div style="font-size:10px;color:'+mColor(sc.overall)+';font-weight:700;margin-top:2px">'+sc.overall+'% match</div>':"")+'</div></div>'+
+      '<div style="text-align:right">'+stBdg(a.status)+(removed?' '+bdg("Removed from job","bc"):'')+(sc?'<div style="font-size:10px;color:'+mColor(sc.overall)+';font-weight:700;margin-top:2px">'+sc.overall+'% match</div>':"")+'</div></div>'+
       '<div style="margin-top:8px;display:flex;gap:4px;flex-wrap:wrap">'+
-        STATS.filter(function(st){return st!==a.status;}).map(function(st){return '<button class="btn btn-xs" data-action="setstatus" data-id="'+a.id+'" data-val="'+st+'">'+st+'</button>';}).join("")+
-        '<button class="btn btn-xs btn-b" data-action="athread" data-id="'+a.id+'">Message</button></div></div>';
-  }).join("");
+        STATS.filter(function(st){return st!==a.status;}).map(function(st){return '<button class="btn btn-xs" data-action="setstatus" data-id="'+a.id+'" data-val="'+st+'">'+(STL[st]||st)+'</button>';}).join("")+
+        '<button class="btn btn-xs btn-b" data-action="athread" data-id="'+a.id+'">Message</button>'+
+        (removed
+          ? '<button class="btn btn-xs btn-a" data-action="unremapp" data-id="'+a.id+'">Restore</button>'
+          : '<button class="btn btn-xs btn-d" data-action="remapp" data-id="'+a.id+'">Remove from job</button>')+
+      '</div></div>';
+  }).join(""):'<div class="card" style="text-align:center;padding:20px;color:var(--mu);font-size:12px">No applications match these filters.</div>';
+  return '<div class="shd" style="margin-bottom:8px">Applications ('+list.length+(list.length!==allApps.length?' of '+allApps.length:'')+')</div>'+bar+rows;
 }
 function rAdmReviews() {
   // Reviews come from the DB-backed `reviews` array (hydrated). Each row already
@@ -2528,6 +2807,11 @@ function rAdmReviews() {
 }
 function openReviewModal(jobId) {
   var j = J(jobId); if (!j) return;
+  // Portal access (v2 M3 3.2): reviews can be blocked per participant (also RLS-enforced).
+  if ((currentStudent()||{}).requestsBlocked) {
+    showAlert({type:'info',title:'Reviews disabled',body:'Leaving reviews is currently disabled on your account. Please contact your coordinator.'});
+    return;
+  }
   var e = E(j.empId);
   var sbtns = '';
   for (var n=1;n<=5;n++) {
@@ -2851,7 +3135,7 @@ function openTC(a){
   var prevTa = document.getElementById('mf');
   var draft = prevTa ? prevTa.value : '';
   showModal('<h3>'+s.name+' and '+(e&&e.name||"")+'</h3>'+
-    '<div style="font-size:11px;color:var(--mu);margin-bottom:10px">'+(j&&j.title||"")+' · '+bdg(a.status,STC[a.status])+'</div>'+
+    '<div style="font-size:11px;color:var(--mu);margin-bottom:10px">'+(j&&j.title||"")+' · '+stBdg(a.status)+'</div>'+
     '<div class="mt" id="mt-list">'+(a.messages||[]).map(function(m){ return _msgBubbleHTML(m, myId); }).join("")+'</div>'+
     '<textarea id="mf" placeholder="Write a message..." style="margin-top:10px"></textarea>'+
     '<div class="mf2"><button class="btn btn-xs" data-action="closemod">Close</button><button class="btn btn-xs btn-p" data-action="sendmsg" data-id="'+a.id+'">Send</button></div>');
@@ -2937,6 +3221,17 @@ async function updateAppAll(id,status){
 }
 async function acceptOffer(id){ await updateAppAll(id,'placed'); }
 async function declineOffer(id){ await updateAppAll(id,'withdrawn'); }
+// Admin soft-remove / restore an application from the job side (v2 M1 1.8).
+async function adminRemoveApp(id){
+  try { await window.DB.adminRemoveApplication(id); }
+  catch(e){ console.error('remove application failed', e); showAlert({type:'error',title:'Remove failed',body:e.message||String(e)}); return; }
+  await hydrateAndRender();
+}
+async function adminRestoreApp(id){
+  try { await window.DB.adminRestoreApplication(id); }
+  catch(e){ console.error('restore application failed', e); showAlert({type:'error',title:'Restore failed',body:e.message||String(e)}); return; }
+  await hydrateAndRender();
+}
 async function toggleVis(sid){
   if(!sid)return;
   var s=S(sid); var next = s ? !s.visibility : true;
@@ -2996,7 +3291,7 @@ function confirmDeleteEmp(eid){
 
 // Manual job status (open / filling / filled) — admin-controlled per position.
 async function setJobStatus(jid, status){
-  if(!jid || ['open','filling','filled'].indexOf(status)<0) return;
+  if(!jid || JOB_STATUSES.indexOf(status)<0) return;
   try {
     var r = await window.sb.from('jobs').update({ status: status }).eq('id', jid);
     if(r.error) throw r.error;
@@ -3049,7 +3344,7 @@ async function duplicateJob(jid){
     delete row.id; delete row.created_at; delete row.updated_at; delete row.cpi;
     // Keep the original title — no "(Copy)" suffix (per client request).
     row.filled = 0;
-    row.status = 'open';
+    row.status = 'posted';
     row.archived = false; // publish immediately (visible to participants), not archived
     var ins = await window.sb.from('jobs').insert(row);
     if(ins.error) throw ins.error;
@@ -3075,6 +3370,21 @@ async function flagIncompleteProfile(sid){
   } catch(e) { console.error('flag incomplete failed', e); showAlert({type:'error',title:'Could not flag',body:e.message||String(e)}); }
 }
 
+// ---- Login-page notice (v2 M3) ----
+async function saveLoginNotice(){
+  var enabled = !!((document.getElementById('ln-enabled')||{}).checked);
+  var text = (document.getElementById('ln-text')||{}).value || '';
+  var st = document.getElementById('ln-status'); if(st) st.textContent='Saving…';
+  try {
+    await window.DB.updateLoginNotice({ enabled: enabled, text: text });
+    loginNotice = { login_notice_enabled: enabled, login_notice_text: text };
+    if(st) st.textContent='Saved ✓';
+  } catch(e){
+    console.error('saveLoginNotice failed', e);
+    if(st) st.textContent='';
+    showAlert({type:'error',title:'Save failed',body:e.message||String(e)});
+  }
+}
 // ---- Notification settings (per-admin in-system + email opt-out) ----
 async function saveNotifSettings(){
   if(!currentUser) return;
@@ -3129,7 +3439,17 @@ function rAdmSettings(){
     }
     return '<div style="padding:32px;text-align:center;color:var(--mu);font-size:13px">Loading preferences…</div>';
   }
-  return '<div class="card" style="max-width:520px">'+
+  // Login-page notice control (v2 M3). Uses the loginNotice global (loaded at boot).
+  var ln = loginNotice || {};
+  var loginNoticeCard = '<div class="card" style="max-width:520px;margin-bottom:14px">'+
+    '<div class="card-title">Login-page notice</div>'+
+    '<p style="font-size:12px;color:var(--mu);margin:6px 0 12px">Show a banner on the login screen (e.g. for a maintenance window). Visible to everyone before they sign in.</p>'+
+    '<label style="display:flex;align-items:center;gap:10px;padding:6px 0"><input type="checkbox" id="ln-enabled"'+(ln.login_notice_enabled?' checked':'')+'><div style="font-weight:600;font-size:13px">Show the notice on the login page</div></label>'+
+    '<span class="fl">Notice text</span><textarea id="ln-text" placeholder="e.g. The portal will be briefly unavailable tonight 12–5 AM EDT for scheduled maintenance.">'+((ln.login_notice_text||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'))+'</textarea>'+
+    '<div style="display:flex;align-items:center;gap:10px;margin-top:10px"><button class="btn btn-p btn-xs" data-action="savelognotice">Save notice</button><span id="ln-status" style="font-size:12px;color:var(--mu)"></span></div>'+
+  '</div>';
+  return loginNoticeCard +
+    '<div class="card" style="max-width:520px">'+
     '<div class="card-title">Notification preferences</div>'+
     '<p style="font-size:12px;color:var(--mu);margin:6px 0 14px">Toggle off to mute the bell or stop receiving emails for this account. Applies to your own account only.</p>'+
     '<label style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--brd)">'+
@@ -3399,6 +3719,7 @@ function openAdminStudentEdit(sid){
     '<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">'+
       '<div data-photo-slot="stu-'+sid+'" style="position:relative;width:64px;height:64px;border-radius:50%;overflow:hidden;flex:0 0 64px">'+avatar+'</div>'+
       '<label class="btn btn-xs" style="cursor:pointer;display:inline-block">Change photo<input type="file" accept="image/*" data-photo="stu-'+sid+'" style="display:none"></label>'+
+      (s.photo?'<button class="btn btn-xs" style="margin-left:6px" data-action="dlphoto" data-id="'+sid+'">&#11015; Download</button>':'')+
     '</div>'+
     '<div class="c2"><div><span class="fl">Name</span><input type="text" id="as-n" value="'+esc(s.name)+'"></div><div><span class="fl">Profile score</span><input type="number" id="as-sc" min="0" max="100" value="'+s.profileScore+'"></div></div>'+
     '<span class="fl">Bio</span><textarea id="as-bio" placeholder="Participant bio...">'+esc(s.bio)+'</textarea>'+
@@ -3406,6 +3727,15 @@ function openAdminStudentEdit(sid){
     '<span class="fl">Skills</span><textarea id="as-sk" placeholder="Skills...">'+esc(s.skills)+'</textarea>'+
     '<span class="fl">Internal notes</span><textarea id="as-nt">'+esc(s.notes)+'</textarea>'+
     '<span class="fl">Visibility</span><select id="as-v"><option value="1"'+(s.visibility?" selected":"")+'>Public</option><option value="0"'+(!s.visibility?" selected":"")+'>Hidden</option></select>'+
+    // Portal access controls (v2 M3 3.2). Enforced in RLS, not just here.
+    '<span class="fl">Portal access</span>'+
+    '<label style="display:flex;align-items:center;gap:9px;padding:6px 0;font-size:13px"><input type="checkbox" id="as-block"'+(s.requestsBlocked?" checked":"")+'>Block interview requests &amp; reviews</label>'+
+    // Coordinator override (v2 M2 finalization): re-open requests for a participant
+    // who is Placed / On Program / Complete, so they can interview for a next
+    // rotation. Their status is unchanged.
+    '<label style="display:flex;align-items:center;gap:9px;padding:6px 0;font-size:13px"><input type="checkbox" id="as-open"'+(s.requestsOpened?" checked":"")+'>Allow interview requests (override Placed / On&nbsp;Program / Complete)</label>'+
+    '<div style="font-size:11px;color:var(--mu);margin:-2px 0 6px;line-height:1.5">Tick this to let a participant who is Placed, On&nbsp;Program, or Complete request interviews for their next rotation. Their status stays the same. Leave unticked to keep them paused.</div>'+
+    '<label style="display:flex;align-items:center;gap:9px;padding:2px 0 4px;font-size:13px"><input type="checkbox" id="as-susp"'+(s.suspended?" checked":"")+'>Suspend portal access entirely</label>'+
     '<div class="mf2"><button class="btn btn-xs" data-action="closemod">Cancel</button><button class="btn btn-xs btn-p" data-action="savestudent" data-id="'+sid+'">Save</button></div>');
 }
 async function saveAdminStudent(sid){
@@ -3421,6 +3751,9 @@ async function saveAdminStudent(sid){
     admin_notes: getVal("as-nt")||null,
     profile_score: parseInt(getVal("as-sc"),10),
     visibility: getVal("as-v")==="1",
+    requests_blocked: !!(document.getElementById('as-block')||{}).checked,
+    requests_opened: !!(document.getElementById('as-open')||{}).checked,
+    suspended: !!(document.getElementById('as-susp')||{}).checked,
   };
   if(isNaN(patch.profile_score)) delete patch.profile_score;
   try {
@@ -3431,15 +3764,19 @@ async function saveAdminStudent(sid){
 }
 function openMatchModal(sid){
   var s=S(sid);var p=s.pd;
-  var scored=jobs.filter(function(j){return j.status==="open";}).map(function(j){return Object.assign({score:(p.roles&&p.roles.length||p.envs&&p.envs.length)?scoreJob(j,p):{overall:50,cats:[50,50,50,50,50]}},j);}).sort(function(a,b){return b.score.overall-a.score.overall;});
+  var scored=jobs.filter(function(j){return jobIsOpen(j.status);}).map(function(j){return Object.assign({score:(p.roles&&p.roles.length||p.envs&&p.envs.length)?scoreJob(j,p):{overall:50,cats:[50,50,50,50,50]}},j);}).sort(function(a,b){return b.score.overall-a.score.overall;});
   showModal('<h3>Matches for '+s.name+'</h3>'+
+    '<div style="max-height:60vh;overflow-y:auto;margin:6px -4px 0;padding:0 4px">'+
     scored.map(function(j){
       var e=E(j.empId);
+      var matched=coordMatches.some(function(m){return m.participantId===sid&&m.jobId===j.id;});
       return '<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--brd)">'+
         '<div><div style="font-size:12px;font-weight:700">'+j.title+'</div><div style="color:var(--mu);font-size:10px">'+(e&&e.name||"")+' · '+j.season+'</div></div>'+
         '<div style="display:flex;align-items:center;gap:8px"><span style="font-size:13px;font-weight:800;color:'+mColor(j.score.overall)+'">'+j.score.overall+'%</span>'+
+        (matched?bdg('&#10003; Matched','bt'):'<button class="btn btn-xs btn-a" data-action="coordmatch" data-id="'+sid+'" data-id2="'+j.id+'">Match</button>')+
         '<button class="btn btn-xs btn-b" data-action="adminplace" data-id="'+sid+'" data-id2="'+j.id+'">Place</button></div></div>';
     }).join("")+
+    '</div>'+
     '<div class="mf2"><button class="btn btn-xs" data-action="closemod">Close</button></div>');
 }
 async function adminPlace(sid,jid){
@@ -3457,6 +3794,69 @@ async function adminPlace(sid,jid){
     if(r.error) throw r.error;
   } catch(e) { console.error('adminPlace failed', e); showAlert({type:'error',title:'Place failed',body:e.message||String(e)}); return; }
   closeModal();
+  await hydrateAndRender();
+}
+// Coordinator match (v2 M2 2.2): flag this job for the participant. The DB
+// trigger emails them; their dashboard shows a match card.
+async function coordMatch(sid,jid){
+  if(!sid||!jid)return;
+  try {
+    await window.DB.createCoordinatorMatch(sid,jid);
+  } catch(e) {
+    if(e && e.code==='23505'){ showAlert({type:'info',title:'Already matched',body:'This participant is already matched to this job.'}); return; }
+    console.error('coordMatch failed', e); showAlert({type:'error',title:'Match failed',body:e.message||String(e)}); return;
+  }
+  await hydrateAndRender();
+  openMatchModal(sid); // refresh the modal so the button shows "Matched"
+  showAlert({type:'success',title:'Matched',body:'The participant has been notified.'});
+}
+// Manual placement recording (v2 M2 3.4): record an off-portal hire for a participant.
+function openManualPlacement(sid,placementId){
+  var s=S(sid); if(!s) return;
+  // Edit mode when an existing placement id is passed (v2 M2 feedback 3).
+  var m=placementId?manualPlacements.filter(function(x){return x.id===placementId;})[0]:null;
+  var editing=!!m;
+  function esc(v){return (v||'').replace(/"/g,'&quot;');}
+  showModal('<h3>'+(editing?'Edit placement':'Record placement')+' &mdash; '+s.name+'</h3>'+
+    '<div style="font-size:12px;color:var(--mu);margin-bottom:12px">For a participant hired off-portal (by phone, etc.). This records the placement and marks them as placed. Dates are shown in US format (MM/DD/YYYY).</div>'+
+    '<span class="fl">Employer *</span><input type="text" id="mp-emp" placeholder="Employer / company name" value="'+(editing?esc(m.employerName):'')+'">'+
+    '<span class="fl">Role / position</span><input type="text" id="mp-role" placeholder="e.g. Front Desk" value="'+(editing?esc(m.roleTitle):'')+'">'+
+    '<div style="display:flex;gap:8px"><div style="flex:1"><span class="fl">Start date</span><input type="date" id="mp-start" value="'+(editing?String(m.startDate||'').slice(0,10):'')+'"></div>'+
+    '<div style="flex:1"><span class="fl">End date</span><input type="date" id="mp-end" value="'+(editing?String(m.endDate||'').slice(0,10):'')+'"></div></div>'+
+    '<span class="fl">Notes</span><textarea id="mp-notes" placeholder="Any details about the placement...">'+(editing?(m.notes||''):'')+'</textarea>'+
+    '<div class="mf2"><button class="btn btn-xs" data-action="closemod">Cancel</button><button class="btn btn-xs btn-p" data-action="savemplacement" data-id="'+sid+'" data-id2="'+(editing?m.id:'')+'">'+(editing?'Save changes':'Save placement')+'</button></div>');
+}
+async function saveManualPlacement(sid,placementId){
+  function gv(id){var el=document.getElementById(id);return el?el.value.trim():'';}
+  var emp=gv('mp-emp');
+  if(!emp){ showAlert({type:'warning',title:'Employer required',body:'Please enter the employer name.'}); return; }
+  var fields={employerName:emp,roleTitle:gv('mp-role'),startDate:gv('mp-start'),endDate:gv('mp-end'),notes:gv('mp-notes')};
+  try {
+    if(placementId){ await window.DB.updateManualPlacement(placementId,fields); }
+    else { await window.DB.createManualPlacement(sid,fields); }
+  } catch(e){ console.error('manual placement failed', e); showAlert({type:'error',title:'Save failed',body:e.message||String(e)}); return; }
+  closeModal();
+  await hydrateAndRender();
+}
+// Download a participant's uploaded profile photo (admin — Adam's M1 feedback).
+async function downloadParticipantPhoto(sid){
+  var s=S(sid); if(!s||!s.photo) return;
+  try{
+    var res=await fetch(s.photo);
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    var blob=await res.blob();
+    var url=URL.createObjectURL(blob);
+    var ext=(blob.type&&blob.type.split('/')[1])||'jpg';
+    var a=document.createElement('a');
+    a.href=url; a.download=(s.name||'participant').replace(/[^a-z0-9]+/gi,'_').toLowerCase()+'-photo.'+ext;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){URL.revokeObjectURL(url);},1500);
+  }catch(e){ console.error('download photo failed',e); showAlert({type:'error',title:'Download failed',body:'Could not download the photo automatically. You can open it and right-click → Save image.'}); }
+}
+async function delManualPlacement(id){
+  if(!id) return;
+  try { await window.DB.removeManualPlacement(id); }
+  catch(e){ console.error('remove placement failed', e); showAlert({type:'error',title:'Remove failed',body:e.message||String(e)}); return; }
   await hydrateAndRender();
 }
 
@@ -3749,7 +4149,7 @@ function rAdmJobForm(){
     ht:j.housing&&j.housing.type||'', hc:(j.housing&&j.housing.costMin||'').toString().replace(/[^\d.]/g,''),
     hcMax:(j.housing&&j.housing.costMax||'').toString().replace(/[^\d.]/g,''),
     hm:j.housing&&j.housing.meals||'',
-    requiresLicense:!!j.requiresLicense, requiresPassport:!!j.requiresPassport,
+    requiresLicense:!!j.requiresLicense, requiresPassport:!!j.requiresPassport, requiresVehicle:!!j.requiresVehicle,
     isTipped:!!j.isTipped, age21:!!j.age21,
     socialEnergy:j.socialEnergy||'', nightlife:j.nightlife||'',
     jobRoles:j.jobRoles||[], hobbies:j.hobbies||[],
@@ -3784,9 +4184,26 @@ function rAdmJobForm(){
     '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:5px">Position title</label>'+
     '<input type="text" id="jf-t" class="ainp" placeholder="e.g. Front Desk Agent, Trail Guide, Lift Operator" value="'+(seed.title||'')+'"></div>'+
     '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:5px">Position description</label>'+
-    '<textarea id="jf-desc" class="ainp" placeholder="Describe day-to-day responsibilities, team culture, what makes this role unique..." style="min-height:100px">'+(seed.desc||'')+'</textarea></div>'+
+    // Rich-text editor (v2 M1 1.10): toolbar drives document.execCommand on the
+    // contenteditable below (see the [data-rtcmd] mousedown handler). Stored HTML
+    // is sanitized on save and on render via window.Sanitize.
+    '<div class="rt-tb">'+
+      '<button type="button" class="rt-b" data-rtcmd="bold" title="Bold"><b>B</b></button>'+
+      '<button type="button" class="rt-b" data-rtcmd="italic" title="Italic"><i>I</i></button>'+
+      '<button type="button" class="rt-b" data-rtcmd="underline" title="Underline"><u>U</u></button>'+
+      '<button type="button" class="rt-b" data-rtcmd="insertUnorderedList" title="Bulleted list">&#8226;&nbsp;List</button>'+
+      '<button type="button" class="rt-b" data-rtcmd="insertOrderedList" title="Numbered list">1.&nbsp;List</button>'+
+    '</div>'+
+    '<div id="jf-desc" class="ainp rt-edit" contenteditable="true" data-ph="Describe day-to-day responsibilities, team culture, what makes this role unique...">'+richHtml(seed.desc)+'</div></div>'+
     '<div style="margin-bottom:12px"><label class="fl" style="margin-top:0;margin-bottom:5px">Position qualifications</label>'+
-    '<textarea id="jf-req" class="ainp" placeholder="Required skills, certifications, experience level, physical requirements..." style="min-height:80px">'+(seed.qual||'')+'</textarea></div>'+
+    '<div class="rt-tb">'+
+      '<button type="button" class="rt-b" data-rtcmd="bold" title="Bold"><b>B</b></button>'+
+      '<button type="button" class="rt-b" data-rtcmd="italic" title="Italic"><i>I</i></button>'+
+      '<button type="button" class="rt-b" data-rtcmd="underline" title="Underline"><u>U</u></button>'+
+      '<button type="button" class="rt-b" data-rtcmd="insertUnorderedList" title="Bulleted list">&#8226;&nbsp;List</button>'+
+      '<button type="button" class="rt-b" data-rtcmd="insertOrderedList" title="Numbered list">1.&nbsp;List</button>'+
+    '</div>'+
+    '<div id="jf-req" class="ainp rt-edit" contenteditable="true" data-ph="Required skills, certifications, experience level, physical requirements...">'+richHtml(seed.qual)+'</div></div>'+
     '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:4px">'+
     '<div><label class="fl" style="margin-top:0;margin-bottom:5px">Pay rate / hr (min)</label>'+
     '<input type="text" id="jf-p" class="ainp" placeholder="e.g. 16" value="'+(seed.pay||'')+'"></div>'+
@@ -3841,6 +4258,7 @@ function rAdmJobForm(){
     '<label style="display:flex;align-items:center;gap:6px;font-size:12px"><input type="checkbox" id="jf-21"'+(seed.age21?' checked':'')+'> 21+ only</label>'+
     '<label style="display:flex;align-items:center;gap:6px;font-size:12px"><input type="checkbox" id="jf-lic"'+(seed.requiresLicense?' checked':'')+'> Requires driver license</label>'+
     '<label style="display:flex;align-items:center;gap:6px;font-size:12px"><input type="checkbox" id="jf-pass"'+(seed.requiresPassport?' checked':'')+'> Requires passport</label>'+
+    '<label style="display:flex;align-items:center;gap:6px;font-size:12px"><input type="checkbox" id="jf-veh"'+(seed.requiresVehicle?' checked':'')+'> Requires a vehicle</label>'+
     '</div>'+
 
     '<div class="qsh" style="margin-top:16px">&#127968; Housing</div>'+
@@ -3897,8 +4315,10 @@ async function saveJobFull(eid, jid) {
     hours_per_week: parseInt(v('hrs'), 10) || 40,
     positions: parseInt(v('slots'), 10) || 1,
     experience: enumOr(v('exp') || 'none', ['none','preferred','required']),
-    qualifications: strOrNull(v('req')),
-    description: strOrNull(v('desc')),
+    qualifications: (function(){var el=document.getElementById('jf-req');if(!el)return null;var h=window.Sanitize?window.Sanitize.sanitizeHtml(el.innerHTML):el.innerHTML;return h||null;})(),
+    // Rich-text description: read the contenteditable's HTML and sanitize before
+    // storing (never trust the DOM's HTML). Empty editor → NULL.
+    description: (function(){var el=document.getElementById('jf-desc');if(!el)return null;var h=window.Sanitize?window.Sanitize.sanitizeHtml(el.innerHTML):el.innerHTML;return h||null;})(),
     housing_type: strOrNull(v('ht')),
     housing_cost: parseFloat(v('hc')) || 0,
     housing_cost_max: hcMax,
@@ -3912,6 +4332,7 @@ async function saveJobFull(eid, jid) {
     savings_level: enumOr(savingsArr[0] || 'mid', ['low','mid','high']),
     requires_license: chk('lic'),
     requires_passport: chk('pass'),
+    requires_vehicle: chk('veh'),
     is_tipped: chk('tip'),
     age_21: chk('21'),
   };
@@ -3921,7 +4342,7 @@ async function saveJobFull(eid, jid) {
       var u = await window.sb.from('jobs').update(patch).eq('id', jid);
       if(u.error) throw u.error;
     } else {
-      patch.status = 'open';
+      patch.status = 'posted';
       var ins = await window.sb.from('jobs').insert(patch);
       if(ins.error) throw ins.error;
     }
@@ -4010,10 +4431,24 @@ function boot() {
   } else if (hasPersistedSession) {
     var main = document.getElementById('main');
     if (main) main.innerHTML =
-      '<div style="padding:64px 32px;text-align:center;color:var(--mu);font-size:13px;font-family:Nunito,sans-serif">Loading&hellip;</div>';
+      '<div style="min-height:calc(100vh - 60px);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;text-align:center;padding:32px">'+
+        '<div style="font-family:Nunito,sans-serif;font-size:24px;font-weight:900;letter-spacing:-.01em;color:var(--tx)">Adventure<span style="color:var(--or-dk)">EXP</span></div>'+
+        '<div class="spinner spinner-lg"></div>'+
+        '<div style="color:var(--mu);font-size:12.5px;font-family:Nunito,sans-serif;font-weight:600">Loading your portal&hellip;</div>'+
+      '</div>';
   } else {
     // No session — render login form right away.
     render();
+  }
+
+  // Login-page notice (v2 M3): fetch anon so the banner is ready. Only re-render
+  // when we're genuinely on the login screen (no session being restored) — else
+  // rendering here would flash the login screen before the dashboard loads.
+  if (window.DB && window.DB.getAppSettings) {
+    window.DB.getAppSettings().then(function(s){
+      loginNotice = s;
+      if (!hasPersistedSession && !isRecoveryFlow && !currentUser) render();
+    }).catch(function(){});
   }
 
   var resolved = !hasPersistedSession;
@@ -4094,7 +4529,7 @@ function boot() {
     // get clobbered by stale DB rows.
     try { await flushProgramSave(); } catch(_) {}
     try {
-      await window.DB.hydrateAll({ currentUser, employers, jobs, students, apps, allApps, notifications, reviews });
+      await window.DB.hydrateAll({ currentUser, employers, jobs, students, apps, allApps, notifications, reviews, coordMatches, manualPlacements });
     } catch (e) { console.error('[boot] hydrate failed', e); }
     render();
   });
